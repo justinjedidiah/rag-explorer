@@ -98,6 +98,5 @@ bm25s
 PyStemmer
 anthropic       # for Claude
 openai          # for OpenAI
-ollama          # for local models
 python-dotenv
 ```

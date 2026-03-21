@@ -50,7 +50,7 @@ dense_retrieval_model_options = ["all-MiniLM-L6-v2","BAAI/bge-large-en-v1.5","Op
 openai_embedding_model_options = ["text-embedding-3-small","text-embedding-3-large"]
 sparse_retrieval_model_options = ["BM25"]
 query_strategy_options = ["None (raw question)", "Rewrite", "HyDE", "Decompose"]
-provider_options = ["openai","claude","llama"]
+provider_options = ["openai","claude"]
 model_options_claude = ["claude-haiku-4-5-20251001","claude-sonnet-4-6","claude-opus-4-6"]
 model_options_openai = ["gpt-4o-mini", "gpt-4o"]
 
@@ -87,8 +87,6 @@ if st.session_state.provider != st.session_state.prev_provider:
         st.session_state.model = model_options_claude[0]
     elif st.session_state.provider == "openai":
         st.session_state.model = model_options_openai[0]
-    elif st.session_state.provider == "llama":
-        st.session_state.model = "llama3"
     st.session_state.prev_provider = st.session_state.provider
 
 with st.sidebar:
@@ -271,7 +269,7 @@ with st.sidebar:
     st.caption("LLM")
     model_side_name = f"{st.session_state.model} (max_tokens={st.session_state.max_tokens})"
     with st.expander(model_side_name, expanded=True):
-        st.selectbox("Provider", ["claude", "openai", "ollama"], key="provider")
+        st.selectbox("Provider", ["claude", "openai"], key="provider")
 
         if st.session_state.provider == "claude":
             st.selectbox("Model", model_options_claude, key="model")
@@ -301,9 +299,6 @@ with st.sidebar:
                     st.session_state._tmp_openai_api_key
                 )
             )
-        elif st.session_state.provider == "llama":
-            st.text_input("Ollama model", value="llama3", key="model")
-            st.number_input("Max Tokens", min_value=500, step=500, key="max_tokens")
 
     st.caption("Evaluation")
     with st.expander("Evaluation", expanded=False):
