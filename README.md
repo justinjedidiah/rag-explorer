@@ -4,6 +4,8 @@ Try every RAG configuration and find the best for your needs. Upload a document 
 
 The debug panel shows exactly what happened like which chunks were retrieved, what scores they got, how the query was transformed, and which sub-question each chunk came from.
 
+![app screenshot](./screenshots/app_screenshot.png)
+
 ---
 
 ## What it does
