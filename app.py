@@ -32,6 +32,9 @@ cleanup_old_collections(max_age_hours=24)
 if "collection" not in st.session_state:
     st.session_state.collection = load_index(session_id)  # restore on refresh
 
+if "indexer" not in st.session_state:
+    st.session_state.indexer = None
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -44,6 +47,7 @@ if "last_debug" not in st.session_state:
 chunk_strategy_options = ["Fixed size","Semantic","Hierarchical"]
 retrieval_mode_options = ["Dense","Sparse"]
 dense_retrieval_model_options = ["all-MiniLM-L6-v2","BAAI/bge-large-en-v1.5","OpenAI Embedding"]
+openai_embedding_model_options = ["text-embedding-3-small","text-embedding-3-large"]
 sparse_retrieval_model_options = ["BM25"]
 query_strategy_options = ["None (raw question)", "Rewrite", "HyDE", "Decompose"]
 provider_options = ["openai","claude","llama"]
@@ -59,6 +63,7 @@ DEFAULTS = {
     "chunk_count": None,
     "retrieval_mode": retrieval_mode_options[0],
     "retrieval_model": dense_retrieval_model_options[0], # dense because retrieval mode default is dense
+    "openai_embedding_model_name": openai_embedding_model_options[0],
     "bm25_params": {"stemming": False, "language": None, "stopwords":None},
     "retrieval_n_chunks": 5,
     "query_strategy": query_strategy_options[0],
@@ -128,7 +133,7 @@ with st.sidebar:
                                 )
                                 st.stop()
                             retrieval_params: OpenAIIndexerParams = {
-                                "model_name": "text-embedding-3-small", # TODO make selection into session state
+                                "model_name": st.session_state.openai_embedding_model_name,
                                 "api_key": st.session_state.openai_api_key,
                             }
                         else:
@@ -199,7 +204,10 @@ with st.sidebar:
             retrieval_model_options = sparse_retrieval_model_options
         st.selectbox("Model", retrieval_model_options, key="retrieval_model")
 
-        if st.session_state.retrieval_model == "BM25":
+        if st.session_state.retrieval_model == "OpenAI Embedding":
+            st.selectbox("OpenAI Embedding Models", openai_embedding_model_options, key="openai_embedding_model_name")
+
+        elif st.session_state.retrieval_model == "BM25":
             st.session_state.bm25_params.update({"language": st.session_state.get("_tmp_bm25_language", STOPWORDS_LANG_BM25[0])})
             st.selectbox("BM25 Language", STOPWORDS_LANG_BM25, key="_tmp_bm25_language",
                 on_change=lambda: st.session_state.bm25_params.update({"language": st.session_state._tmp_bm25_language})
@@ -394,8 +402,16 @@ with col_debug:
     else:
         debug = st.session_state.last_debug
 
+        # costs
+        if st.session_state.retrieval_model == "OpenAI Embedding":
+            if hasattr(st.session_state.indexer, "tokens_used"):
+                with st.expander("💵 Embedding tokens used", expanded=True):
+                    st.markdown(f"total: :green[{sum(st.session_state.indexer.tokens_used.values())}]")
+                    for event, tokens_used in st.session_state.indexer.tokens_used.items():
+                        st.markdown(f"{event}: :green[{tokens_used:,}]")
+
         # query trace
-        with st.expander("💬 Query trace", expanded=True):
+        with st.expander("💬 Query trace", expanded=False):
             st.markdown(f"**Strategy:** `{debug['query_strategy']}`")
             st.markdown(f"**Original:** {debug['question']}")
             
@@ -414,7 +430,7 @@ with col_debug:
                 for i, q in enumerate(display["sub_questions"], 1):
                     st.markdown(f"{i}. {q}")
 
-        with st.expander(f"🔎 Retrieved chunks ({len(debug['chunks'])})", expanded=True):
+        with st.expander(f"🔎 Retrieved chunks ({len(debug['chunks'])})", expanded=False):
             for i, chunk in enumerate(debug["chunks"], 1):
                 score = chunk.get("score", 0)
                 if score >= 0.7:
