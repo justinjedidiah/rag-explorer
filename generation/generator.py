@@ -1,10 +1,3 @@
-import anthropic
-from config import ANTHROPIC_API_KEY
-
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-# generation/generator.py
-
 def generate(question: str, chunks: list[dict], provider: str, model: str, max_tokens: int, api_key: str) -> str:
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
