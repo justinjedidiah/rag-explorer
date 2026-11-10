@@ -1,11 +1,59 @@
-def generate(question: str, chunks: list[dict], provider: str, model: str, max_tokens: int, api_key: str) -> str:
+class LLM:
+    """One chat-completion interface over Claude and OpenAI that records token usage.
+
+    Every call appends {"label", "input_tokens", "output_tokens"} to self.usage,
+    so the UI can show what each step of the pipeline cost.
+    """
+
+    def __init__(self, provider: str, model: str, api_key: str):
+        self.provider = provider
+        self.model = model
+        self.usage: list[dict] = []
+        if provider == "claude":
+            import anthropic
+            self.client = anthropic.Anthropic(api_key=api_key)
+        elif provider == "openai":
+            from openai import OpenAI
+            self.client = OpenAI(api_key=api_key)
+        else:
+            raise ValueError(f"Unknown provider: {provider}")
+
+    def complete(self, prompt: str, max_tokens: int = 512, label: str = "LLM call") -> str:
+        messages = [{"role": "user", "content": prompt}]
+        if self.provider == "claude":
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                messages=messages,
+            )
+            text = "".join(block.text for block in response.content if block.type == "text")
+            tokens_in, tokens_out = response.usage.input_tokens, response.usage.output_tokens
+        else:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                max_completion_tokens=max_tokens,
+                messages=messages,
+            )
+            text = response.choices[0].message.content or ""
+            tokens_in, tokens_out = response.usage.prompt_tokens, response.usage.completion_tokens
+
+        self.usage.append({"label": label, "input_tokens": tokens_in, "output_tokens": tokens_out})
+        return text
+
+
+def chunk_text_for_llm(chunk: dict) -> str:
+    """The text of a chunk that is sent to the LLM: the parent paragraph when
+    hierarchical chunking is used, otherwise the chunk itself."""
+    return chunk.get("parent_text") or chunk["text"]
+
+
+def build_prompt(question: str, chunks: list[dict]) -> str:
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
-        text = chunk["parent_text"] if chunk["parent_text"] else chunk['text']
-        context_parts.append(f"[Source {i} | Page {chunk['page']}]\n{text}")
+        context_parts.append(f"[Source {i} | Page {chunk['page']}]\n{chunk_text_for_llm(chunk)}")
     context = "\n\n---\n\n".join(context_parts)
 
-    prompt = f"""Answer the question using only the sources below.
+    return f"""Answer the question using only the sources below.
 Cite sources as [Source N]. If the answer isn't in the sources, say so.
 
 {context}
@@ -13,65 +61,6 @@ Cite sources as [Source N]. If the answer isn't in the sources, say so.
 Question: {question}
 Answer:"""
 
-    if provider == "claude":
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.content[0].text
 
-    elif provider == "openai":
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model=model,
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content
-
-    # elif provider == "ollama":
-    #     import ollama
-    #     response = ollama.chat(
-    #         model=model,
-    #         messages=[{"role": "user", "content": prompt}],
-    #         options={
-    #             'num_predict': max_tokens
-    #         }
-    #     )
-    #     return response["message"]["content"]
-
-    else:
-        raise ValueError(f"Unknown provider: {provider}")
-
-def quick_llm(provider: str, model: str, api_key: str):
-    """Returns a callable(prompt) -> str for internal use."""
-    def call(prompt: str) -> str:
-        if provider == "claude":
-            import anthropic
-            client = anthropic.Anthropic(api_key=api_key)
-            response = client.messages.create(
-                model=model,
-                max_tokens=512,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return response.content[0].text
-        elif provider == "openai":
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return response.choices[0].message.content
-        # elif provider == "ollama":
-        #     import ollama
-        #     response = ollama.chat(
-        #         model=model,
-        #         messages=[{"role": "user", "content": prompt}]
-        #     )
-        #     return response["message"]["content"]
-    return call
+def generate(question: str, chunks: list[dict], llm: LLM, max_tokens: int) -> str:
+    return llm.complete(build_prompt(question, chunks), max_tokens=max_tokens, label="Generation")

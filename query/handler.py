@@ -1,7 +1,7 @@
 import json
 import re
 
-def handle_query(question: str, strategy: str, llm_fn) -> dict:
+def handle_query(question: str, strategy: str, llm) -> dict:
     """
     Returns:
       {
@@ -25,7 +25,7 @@ Return ONLY the rewritten question, nothing else.
 
 Original: {question}
 Rewritten:"""
-        rewritten = llm_fn(prompt).strip()
+        rewritten = llm.complete(prompt, label="Query rewrite").strip()
         return {
             "queries": [rewritten],
             "display": {"rewritten": rewritten},
@@ -39,7 +39,7 @@ Write as if you found this text in a document. No preamble, just the paragraph.
 
 Question: {question}
 Answer paragraph:"""
-        hypothetical = llm_fn(prompt).strip()
+        hypothetical = llm.complete(prompt, label="HyDE document").strip()
         return {
             "queries": [hypothetical],
             "display": {"hypothetical_document": hypothetical},
@@ -54,7 +54,7 @@ Example: ["What is X?", "How does Y work?"]
 
 Question: {question}
 Sub-questions:"""
-        raw = llm_fn(prompt).strip()
+        raw = llm.complete(prompt, label="Query decomposition").strip()
         match = re.search(r"\[.*?\]", raw, re.DOTALL)
         try:
             sub_questions = json.loads(match.group()) if match else [question]

@@ -10,9 +10,8 @@ from indexing.vectorstore import load_index, cleanup_old_collections
 from indexing.vectors import SentenceTransformerIndexerParams, OpenAIIndexerParams
 from indexing.nonvectors import BM25IndexerParams, STOPWORDS_LANG_BM25
 from retrieval.retriever import retrieve, merge_results
-from generation.generator import generate
+from generation.generator import generate, LLM
 from query.handler import handle_query
-from generation.generator import quick_llm
 
 
 # PAGE CONFIG ---------------------------------------------------------------
@@ -343,11 +342,9 @@ with col_chat:
             st.session_state.messages.append({"role": "user", "content": question})
             with st.spinner("Retrieving and generating..."):
                 # query handling
-                llm_fn = quick_llm(st.session_state.provider, st.session_state.model,
-                                st.session_state.anthropic_api_key if st.session_state.provider == "claude" 
-                                else st.session_state.openai_api_key)
-                
-                query_result = handle_query(question, st.session_state.query_strategy, llm_fn)
+                llm = LLM(st.session_state.provider, st.session_state.model, api_key) if has_api_key else None
+
+                query_result = handle_query(question, st.session_state.query_strategy, llm)
                 
                 # retrieve for each query, merge results
                 results_per_query = []
@@ -363,7 +360,7 @@ with col_chat:
                 chunks_found = merge_results(results_per_query, st.session_state.retrieval_n_chunks)
             if st.session_state.enable_generation and has_api_key:
                 with st.spinner("Generating..."):
-                    answer = generate(question, chunks_found, st.session_state.provider, st.session_state.model, st.session_state.max_tokens, (st.session_state.anthropic_api_key if st.session_state.provider == "claude" else st.session_state.openai_api_key))
+                    answer = generate(question, chunks_found, llm, st.session_state.max_tokens)
             else:
                 answer = None
             pages_used = sorted(set(c["page"] for c in chunks_found))
@@ -384,6 +381,7 @@ with col_chat:
                 "query_display": query_result["display"],
                 "chunks": chunks_found,
                 "query_chunk_map": query_chunk_map,
+                "llm_usage": llm.usage if llm else [],
             }
 
             for key in list(st.session_state.keys()):
@@ -407,6 +405,14 @@ with col_debug:
                     st.markdown(f"total: :green[{sum(st.session_state.indexer.tokens_used.values())}]")
                     for event, tokens_used in st.session_state.indexer.tokens_used.items():
                         st.markdown(f"{event}: :green[{tokens_used:,}]")
+
+        if debug.get("llm_usage"):
+            with st.expander("💵 LLM tokens used", expanded=True):
+                total_in = sum(u["input_tokens"] for u in debug["llm_usage"])
+                total_out = sum(u["output_tokens"] for u in debug["llm_usage"])
+                st.markdown(f"total: :green[{total_in:,}] in / :green[{total_out:,}] out")
+                for u in debug["llm_usage"]:
+                    st.markdown(f"{u['label']}: :green[{u['input_tokens']:,}] in / :green[{u['output_tokens']:,}] out")
 
         # query trace
         with st.expander("💬 Query trace", expanded=False):
