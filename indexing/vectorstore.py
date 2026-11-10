@@ -1,3 +1,4 @@
+import re
 import time
 import chromadb
 from config import CHROMA_PATH
@@ -19,7 +20,8 @@ def chunk_metadata(chunk: dict) -> dict:
 
 def get_session_collection_name(session_id: str) -> str:
     """Make Chroma collection name based on streamlit session id"""
-    return f"docs_{session_id}"
+    # Chroma only allows [a-zA-Z0-9._-] in collection names
+    return "docs_" + re.sub(r"[^a-zA-Z0-9._-]", "-", session_id)
 
 
 def build_index(chunks: list[dict], vectors: list[list[float]], session_id: str):
