@@ -1,3 +1,17 @@
+import json
+import re
+
+
+def parse_json_list(raw: str) -> list:
+    """Pull the first JSON array out of an LLM reply; [] when there is none."""
+    match = re.search(r"\[.*?\]", raw, re.DOTALL)
+    try:
+        value = json.loads(match.group()) if match else []
+    except json.JSONDecodeError:
+        return []
+    return value if isinstance(value, list) else []
+
+
 class LLM:
     """One chat-completion interface over Claude and OpenAI that records token usage.
 

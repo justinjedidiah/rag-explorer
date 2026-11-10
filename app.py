@@ -43,6 +43,8 @@ DEFAULTS = {
     "bm25_stemming": False,
     "bm25_stopwords_mode": STOPWORD_MODES[0],
     "bm25_stopwords_custom": "",
+    "question_index": False,
+    "questions_per_chunk": 2,
     "hybrid_dense_weight": 0.5,
     "retrieval_n_chunks": 5,
     "rerank": False,
@@ -94,18 +96,38 @@ def reset_model():
     st.session_state.model = MODELS[st.session_state.provider][0]
 
 
-def index_document(uploaded, settings: dict):
+def usage_summary(usage: list[dict]) -> list[str]:
+    """LLM token usage as markdown lines: a total, then one line per kind of call."""
+    by_label = {}
+    for u in usage:
+        entry = by_label.setdefault(u["label"], {"calls": 0, "in": 0, "out": 0})
+        entry["calls"] += 1
+        entry["in"] += u["input_tokens"]
+        entry["out"] += u["output_tokens"]
+    total_in, total_out = sum(e["in"] for e in by_label.values()), sum(e["out"] for e in by_label.values())
+    lines = [f"total: :green[{total_in:,}] in / :green[{total_out:,}] out"]
+    for label, e in by_label.items():
+        calls = f" ({e['calls']} calls)" if e["calls"] > 1 else ""
+        lines.append(f"{label}{calls}: :green[{e['in']:,}] in / :green[{e['out']:,}] out")
+    return lines
+
+
+def index_document(uploaded, settings: dict, llm):
     try:
         with st.status(f"Indexing {uploaded.name}...", expanded=True) as status:
             status.write("Reading PDF...")
             pages = load_pdf(uploaded.getvalue())
+            config = pipeline.index_config(settings)
+            progress_bar = st.progress(0.0) if config.get("question_index") else None
             index = pipeline.build_index(
                 pages,
-                pipeline.index_config(settings),
+                config,
                 session_id,
                 openai_api_key=settings["openai_api_key"],
                 hf_token=settings["hf_token"],
+                llm=llm,
                 log=status.write,
+                progress=progress_bar.progress if progress_bar else None,
             )
     except Exception as e:
         st.error(f"Indexing failed: {e}")
@@ -124,6 +146,8 @@ with st.sidebar:
 
     api_key = st.session_state.anthropic_api_key if st.session_state.provider == "claude" else st.session_state.openai_api_key
     has_api_key = bool(api_key)
+    if not (has_api_key and st.session_state.enable_generation):
+        st.session_state.question_index = False  # needs the LLM, see the toggle below
     current_config = pipeline.index_config({key: st.session_state[key] for key in DEFAULTS})
     index = st.session_state.index
 
@@ -151,6 +175,8 @@ with st.sidebar:
         if index:
             st.success(f"✓ {st.session_state.doc_name}")
             st.caption(f"{index['chunk_count']} {index['config']['chunk_strategy']} chunks · {retrieval_label(index['config'])}")
+            if index["config"].get("question_index"):
+                st.caption(f"Indexed as {index['config']['questions_per_chunk']} hypothetical questions per chunk")
             if current_config != index["config"]:
                 st.warning("Chunking or retrieval settings changed since indexing. Index the document again to apply them.")
 
@@ -185,6 +211,14 @@ with st.sidebar:
             if st.session_state.bm25_stopwords_mode == "Custom":
                 st.text_input("Custom stopwords (comma separated)", key="bm25_stopwords_custom")
 
+        st.toggle(
+            "Index hypothetical questions", key="question_index", disabled=not llm_on,
+            help="Instead of the chunk text, index questions an LLM writes for each chunk, so your question is "
+                 "matched against questions. Costs one LLM call per chunk when indexing. HyDE is unavailable with it.",
+        )
+        if st.session_state.question_index:
+            st.number_input("Questions per chunk", min_value=1, max_value=5, key="questions_per_chunk")
+
         if st.session_state.retrieval_mode == "Hybrid":
             st.slider(
                 "Dense weight", min_value=0.0, max_value=1.0, step=0.05, key="hybrid_dense_weight",
@@ -203,6 +237,9 @@ with st.sidebar:
 
     st.caption("Query strategy")
     query_strategies_available = QUERY_STRATEGIES if llm_on else [NO_STRATEGY]
+    if index and index["config"].get("question_index"):
+        # the index holds questions, so turning the query into a fake answer would hurt
+        query_strategies_available = [s for s in query_strategies_available if s != "HyDE"]
     if st.session_state.query_strategy not in query_strategies_available:
         st.session_state.query_strategy = NO_STRATEGY
     with st.expander(st.session_state.query_strategy, expanded=True):
@@ -241,7 +278,7 @@ settings = {key: st.session_state[key] for key in DEFAULTS}
 # Indexing runs after the whole sidebar is drawn: st.rerun() discards the state
 # of every widget that was not rendered yet in the current run.
 if index_clicked and uploaded:
-    index_document(uploaded, settings)
+    index_document(uploaded, settings, LLM(settings["provider"], settings["model"], api_key) if settings["question_index"] else None)
 
 # MAIN AREA --------------------------------------------------------------------
 col_chat, col_debug = st.columns([3, 2])
@@ -303,11 +340,13 @@ with col_debug:
         # costs
         if debug["llm_usage"]:
             with st.expander("💵 LLM tokens used (this question)", expanded=True):
-                total_in = sum(u["input_tokens"] for u in debug["llm_usage"])
-                total_out = sum(u["output_tokens"] for u in debug["llm_usage"])
-                st.markdown(f"total: :green[{total_in:,}] in / :green[{total_out:,}] out")
-                for u in debug["llm_usage"]:
-                    st.markdown(f"{u['label']}: :green[{u['input_tokens']:,}] in / :green[{u['output_tokens']:,}] out")
+                for line in usage_summary(debug["llm_usage"]):
+                    st.markdown(line)
+
+        if index and index["llm_usage"]:
+            with st.expander("💵 LLM tokens used (indexing this document)", expanded=False):
+                for line in usage_summary(index["llm_usage"]):
+                    st.markdown(line)
 
         embedding_usage = index["dense"]["indexer"].usage if index and index["dense"] else []
         if embedding_usage:
@@ -335,6 +374,8 @@ with col_debug:
         with st.expander(f"🔎 Retrieved chunks ({len(debug['chunks'])})", expanded=False):
             for i, chunk in enumerate(debug["chunks"], 1):
                 st.markdown(f"**Chunk {i}** — Page {chunk['page']} — {score_badge(chunk)}")
+                if chunk.get("matched_question"):
+                    st.caption(f"↳ matched question: {chunk['matched_question']}")
                 if chunk.get("score_type") == "rerank":
                     st.caption(f"↳ before reranking: {chunk['retrieval_score_type']} {chunk['retrieval_score']:.2f}")
                 if chunk.get("score_type") == "hybrid":

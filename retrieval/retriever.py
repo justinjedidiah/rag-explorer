@@ -1,50 +1,64 @@
 """Search an index built by pipeline.build_index.
 
 Every function returns chunks as dicts:
-  {"chunk_id", "text", "page", "score", "score_type", "parent_text", "parent_id"}
+  {"chunk_id", "text", "page", "score", "score_type", "parent_text", "parent_id", "matched_question"}
 score_type says what the number means: "cosine" (0-1 similarity), "bm25" (unbounded)
 or "hybrid" (weighted mix of both, 0-1 but relative to the other candidates).
 """
 
 
 def _to_chunk(chunk_id: str, text: str, metadata: dict, score: float, score_type: str) -> dict:
+    # In a question index the entry that matched is a generated question; hand
+    # back the chunk it was written for and keep the question for the debug panel.
+    is_question = bool(metadata.get("source_chunk_id"))
     return {
-        "chunk_id": chunk_id,
-        "text": text,
+        "chunk_id": metadata["source_chunk_id"] if is_question else chunk_id,
+        "text": metadata["source_text"] if is_question else text,
         "page": metadata["page"],
         "score": round(float(score), 4),
         "score_type": score_type,
         "parent_text": metadata["parent_text"] or None,
         "parent_id": metadata["parent_id"] or None,
+        "matched_question": text if is_question else None,
     }
+
+
+def _best_per_chunk(chunks: list[dict], k: int) -> list[dict]:
+    """Chunks sorted best-first; several questions of one chunk may have matched, keep its best."""
+    seen, unique = set(), []
+    for chunk in chunks:
+        if chunk["chunk_id"] not in seen:
+            seen.add(chunk["chunk_id"])
+            unique.append(chunk)
+    return unique[:k]
 
 
 def search_dense(dense: dict, query: str, k: int) -> list[dict]:
     collection = dense["store"]
     results = collection.query(
         query_embeddings=[dense["indexer"].process_query(query)],
-        n_results=min(k, collection.count()),
+        n_results=min(k * dense["entries_per_chunk"], collection.count()),
     )
-    return [
+    return _best_per_chunk([
         _to_chunk(chunk_id, text, metadata, 1 - distance, "cosine")
         for chunk_id, text, metadata, distance in zip(
             results["ids"][0], results["documents"][0], results["metadatas"][0], results["distances"][0]
         )
-    ]
+    ], k)
 
 
 def search_sparse(sparse: dict, query: str, k: int) -> list[dict]:
     store = sparse["store"]
     results, scores = store["bm25"].retrieve(
         sparse["indexer"].process_query(query),
-        k=min(k, len(store["ids"])),  # bm25s raises when k exceeds the corpus size
+        k=min(k * sparse["entries_per_chunk"], len(store["ids"])),  # bm25s raises when k exceeds the corpus size
         show_progress=False,
     )
-    return [
+    return _best_per_chunk([
         _to_chunk(store["ids"][idx], store["texts"][idx], store["metadatas"][idx], score, "bm25")
         for idx, score in zip(results[0], scores[0])
         if score > 0  # 0 means no query term matched this chunk
-    ]
+    ], k)
 
 
 def search_hybrid(index: dict, query: str, k: int, dense_weight: float) -> list[dict]:

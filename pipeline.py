@@ -5,6 +5,7 @@ question through it. Both take plain dicts so they can be driven from a
 script or a test as well as from app.py.
 """
 from ingestion.chunker import chunk_documents
+from indexing.questions import generate_question_entries
 from indexing.indexers import get_dense_indexer, get_sparse_indexer, OPENAI_EMBEDDING
 from retrieval.retriever import search, merge_results
 from retrieval.reranker import rerank
@@ -46,6 +47,10 @@ def index_config(settings: dict) -> dict:
             config["bm25_stopwords"] = [w for w in words if w]
         else:
             config["bm25_stopwords"] = None
+
+    if settings["question_index"]:
+        config["question_index"] = True
+        config["questions_per_chunk"] = settings["questions_per_chunk"]
     return config
 
 
@@ -55,12 +60,16 @@ def build_index(
     session_id: str,
     openai_api_key: str | None = None,
     hf_token: str | None = None,
+    llm: LLM | None = None,
     log=print,
+    progress=None,
 ) -> dict:
     """Chunk the pages and index them as config (from index_config) describes.
 
-    Returns {"config", "chunk_count", "dense", "sparse"}; dense and sparse are
-    {"indexer", "store"} or None.
+    llm is only needed for a question index; progress(fraction) is called while
+    its questions are generated.
+    Returns {"config", "chunk_count", "dense", "sparse", "llm_usage"}; dense and
+    sparse are {"indexer", "store", "entries_per_chunk"} or None.
     """
     if not pages:
         raise ValueError("No text could be extracted from this PDF. Scanned PDFs need OCR first.")
@@ -70,20 +79,32 @@ def build_index(
         pages, config["chunk_strategy"], config["chunk_size"], config["chunk_overlap"],
         config.get("chunk_parent_size"),
     )
-    index = {"config": config, "chunk_count": len(chunks), "dense": None, "sparse": None}
+    index = {"config": config, "chunk_count": len(chunks), "dense": None, "sparse": None, "llm_usage": []}
+
+    # What gets embedded / tokenised: the chunks, or generated questions pointing back to them
+    entries, entries_per_chunk = chunks, 1
+    if config.get("question_index"):
+        if llm is None:
+            raise ValueError("Indexing hypothetical questions needs the LLM enabled.")
+        entries_per_chunk = config["questions_per_chunk"]
+        log(f"Writing {entries_per_chunk} questions for each of {len(chunks)} chunks with {llm.model}...")
+        entries = generate_question_entries(chunks, llm, entries_per_chunk, progress)
+        index["llm_usage"] = llm.usage
 
     if "dense_model" in config:
         model = config.get("openai_embedding_model_name", config["dense_model"])
-        log(f"Embedding {len(chunks)} chunks with {model}...")
+        log(f"Embedding {len(entries)} texts with {model}...")
         indexer = get_dense_indexer(config, openai_api_key, hf_token)
-        vectors = indexer.process_chunks(chunks)
-        index["dense"] = {"indexer": indexer, "store": indexer.build_index(chunks, vectors, session_id)}
+        vectors = indexer.process_chunks(entries)
+        store = indexer.build_index(entries, vectors, session_id)
+        index["dense"] = {"indexer": indexer, "store": store, "entries_per_chunk": entries_per_chunk}
 
     if "bm25_language" in config:
-        log(f"Building BM25 index over {len(chunks)} chunks...")
+        log(f"Building BM25 index over {len(entries)} texts...")
         indexer = get_sparse_indexer(config)
-        tokens = indexer.process_chunks(chunks)
-        index["sparse"] = {"indexer": indexer, "store": indexer.build_index(chunks, tokens, session_id)}
+        tokens = indexer.process_chunks(entries)
+        store = indexer.build_index(entries, tokens, session_id)
+        index["sparse"] = {"indexer": indexer, "store": store, "entries_per_chunk": entries_per_chunk}
 
     return index
 
@@ -101,9 +122,13 @@ def answer_question(question: str, index: dict, settings: dict, llm: LLM | None)
         steps.append({"name": name, "ran": ran, "detail": detail})
 
     strategy = settings["query_strategy"] if llm else NO_STRATEGY
+    strategy_detail = strategy if strategy != NO_STRATEGY else "raw question"
+    if strategy == "HyDE" and index["config"].get("question_index"):
+        # the index holds questions, so the query must stay a question
+        strategy, strategy_detail = NO_STRATEGY, "HyDE skipped: the index stores questions, not answers"
     query_result = handle_query(question, strategy, llm)
     queries = query_result["queries"]
-    step("Query strategy", strategy != NO_STRATEGY, strategy if strategy != NO_STRATEGY else "raw question")
+    step("Query strategy", strategy != NO_STRATEGY, strategy_detail)
 
     n_chunks = settings["retrieval_n_chunks"]
     # with reranking, retrieve a wide candidate set cheaply and let the cross-encoder pick

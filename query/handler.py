@@ -1,5 +1,4 @@
-import json
-import re
+from generation.generator import parse_json_list
 
 NO_STRATEGY = "None (raw question)"
 
@@ -57,13 +56,8 @@ Example: ["What is X?", "How does Y work?"]
 Question: {question}
 Sub-questions:"""
         raw = llm.complete(prompt, label="Query decomposition").strip()
-        match = re.search(r"\[.*?\]", raw, re.DOTALL)
-        try:
-            sub_questions = json.loads(match.group()) if match else []
-        except json.JSONDecodeError:
-            sub_questions = []
         # fall back to the original question when the LLM returned nothing usable
-        sub_questions = [q.strip() for q in sub_questions if isinstance(q, str) and q.strip()] or [question]
+        sub_questions = [q.strip() for q in parse_json_list(raw) if isinstance(q, str) and q.strip()] or [question]
         return {
             "queries": sub_questions,
             "display": {"sub_questions": sub_questions},

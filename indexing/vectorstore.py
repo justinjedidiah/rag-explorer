@@ -11,6 +11,9 @@ def chunk_metadata(chunk: dict) -> dict:
         "page": chunk["page"],
         "parent_text": chunk.get("parent_text") or "",
         "parent_id": chunk.get("parent_id") or "",
+        # set when the indexed text is a generated question that stands in for the chunk
+        "source_chunk_id": chunk.get("source_chunk_id") or "",
+        "source_text": chunk.get("source_text") or "",
     }
 
 
