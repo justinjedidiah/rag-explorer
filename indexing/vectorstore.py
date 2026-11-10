@@ -23,16 +23,20 @@ def build_index(chunks: list[dict], vectors: list[list[float]], session_id: str)
             "session_id": session_id,
         }
     )
-    collection.add(
-        ids=[c["chunk_id"] for c in chunks],
-        documents=[c["text"] for c in chunks],
-        embeddings=vectors,
-        metadatas=[{
-            "page": c["page"],
-            "parent_text": c.get("parent_text") or "",
-            "parent_id": c.get("parent_id") or "",
-        } for c in chunks],
-    )
+    # Chroma rejects a single add() above its max batch size
+    batch_size = client.get_max_batch_size()
+    for start in range(0, len(chunks), batch_size):
+        batch = chunks[start:start + batch_size]
+        collection.add(
+            ids=[c["chunk_id"] for c in batch],
+            documents=[c["text"] for c in batch],
+            embeddings=vectors[start:start + batch_size],
+            metadatas=[{
+                "page": c["page"],
+                "parent_text": c.get("parent_text") or "",
+                "parent_id": c.get("parent_id") or "",
+            } for c in batch],
+        )
     return collection
 
 def load_index(session_id: str):
