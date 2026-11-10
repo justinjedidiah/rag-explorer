@@ -45,6 +45,8 @@ DEFAULTS = {
     "bm25_stopwords_custom": "",
     "hybrid_dense_weight": 0.5,
     "retrieval_n_chunks": 5,
+    "rerank": False,
+    "rerank_candidates": 20,
     "query_strategy": QUERY_STRATEGIES[0],
     "provider": PROVIDERS[0],
     "model": MODELS[PROVIDERS[0]][0],
@@ -71,7 +73,7 @@ for key, val in {"index": None, "doc_name": None, "messages": [], "last_debug": 
 def score_badge(chunk: dict) -> str:
     """Scores only get a traffic light when they are on a 0-1 relevance scale."""
     score, score_type = chunk["score"], chunk.get("score_type", "cosine")
-    if score_type in ("cosine",):
+    if score_type in ("cosine", "rerank"):
         icon = "🟢" if score >= 0.7 else "🟡" if score >= 0.4 else "🔴"
     else:
         icon = "⚪"
@@ -190,6 +192,14 @@ with st.sidebar:
             )
 
         st.number_input("Chunks to retrieve", min_value=1, key="retrieval_n_chunks")
+
+        st.toggle(
+            "Rerank with cross-encoder", key="rerank",
+            help="Retrieve more candidates, re-score each against the question with a cross-encoder "
+                 "(ms-marco-MiniLM, ~90 MB download on first use) and keep the best. No re-index needed.",
+        )
+        if st.session_state.rerank:
+            st.number_input("Candidates to rerank", min_value=1, key="rerank_candidates")
 
     st.caption("Query strategy")
     query_strategies_available = QUERY_STRATEGIES if llm_on else [NO_STRATEGY]
@@ -325,6 +335,8 @@ with col_debug:
         with st.expander(f"🔎 Retrieved chunks ({len(debug['chunks'])})", expanded=False):
             for i, chunk in enumerate(debug["chunks"], 1):
                 st.markdown(f"**Chunk {i}** — Page {chunk['page']} — {score_badge(chunk)}")
+                if chunk.get("score_type") == "rerank":
+                    st.caption(f"↳ before reranking: {chunk['retrieval_score_type']} {chunk['retrieval_score']:.2f}")
                 if chunk.get("score_type") == "hybrid":
                     dense_score = "not in dense results" if chunk["dense_score"] is None else f"cosine {chunk['dense_score']:.2f}"
                     sparse_score = "not in BM25 results" if chunk["sparse_score"] is None else f"bm25 {chunk['sparse_score']:.2f}"

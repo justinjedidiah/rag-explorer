@@ -7,6 +7,7 @@ script or a test as well as from app.py.
 from ingestion.chunker import chunk_documents
 from indexing.indexers import get_dense_indexer, get_sparse_indexer, OPENAI_EMBEDDING
 from retrieval.retriever import search, merge_results
+from retrieval.reranker import rerank
 from query.handler import handle_query, NO_STRATEGY
 from generation.generator import LLM, generate
 
@@ -105,13 +106,22 @@ def answer_question(question: str, index: dict, settings: dict, llm: LLM | None)
     step("Query strategy", strategy != NO_STRATEGY, strategy if strategy != NO_STRATEGY else "raw question")
 
     n_chunks = settings["retrieval_n_chunks"]
-    results_per_query = [search(index, q, n_chunks, settings["hybrid_dense_weight"]) for q in queries]
+    # with reranking, retrieve a wide candidate set cheaply and let the cross-encoder pick
+    n_retrieve = max(settings["rerank_candidates"], n_chunks) if settings["rerank"] else n_chunks
+    results_per_query = [search(index, q, n_retrieve, settings["hybrid_dense_weight"]) for q in queries]
     query_chunk_map = {q: [c["chunk_id"] for c in found] for q, found in zip(queries, results_per_query)}
-    chunks = merge_results(results_per_query, n_chunks)
+    chunks = merge_results(results_per_query, n_retrieve)
     step(
         f"{index['config']['retrieval_mode']} retrieval", True,
         f"{len(chunks)} chunks from {len(queries)} quer{'y' if len(queries) == 1 else 'ies'}",
     )
+
+    if settings["rerank"]:
+        n_candidates = len(chunks)
+        chunks = rerank(question, chunks, n_chunks)  # always against the user's own question
+        step("Reranker", True, f"kept {len(chunks)} of {n_candidates} candidates")
+    else:
+        step("Reranker", False, "disabled")
 
     answer = None
     if llm:
