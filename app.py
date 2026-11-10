@@ -6,6 +6,7 @@ from indexing.indexers import OPENAI_EMBEDDING
 from indexing.nonvectors import BM25_LANGUAGES
 from query.handler import NO_STRATEGY
 from generation.generator import LLM
+from generation import models as model_catalog
 import pipeline
 
 
@@ -20,14 +21,9 @@ st.set_page_config(
 CHUNK_STRATEGIES = ["Fixed size", "Semantic", "Hierarchical"]
 RETRIEVAL_MODES = ["Dense", "Sparse", "Hybrid"]
 DENSE_MODELS = ["all-MiniLM-L6-v2", "BAAI/bge-small-en-v1.5", "BAAI/bge-large-en-v1.5", OPENAI_EMBEDDING]
-OPENAI_EMBEDDING_MODELS = ["text-embedding-3-small", "text-embedding-3-large"]
 STOPWORD_MODES = ["None", "Language default", "Custom"]
 QUERY_STRATEGIES = [NO_STRATEGY, "Rewrite", "HyDE", "Decompose"]
 PROVIDERS = ["openai", "claude"]
-MODELS = {
-    "claude": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
-    "openai": ["gpt-4o-mini", "gpt-4o"],
-}
 
 # Every setting lives in st.session_state under these keys; the widgets bind to them.
 DEFAULTS = {
@@ -38,7 +34,7 @@ DEFAULTS = {
     "chunk_overlap": 30,
     "retrieval_mode": RETRIEVAL_MODES[0],
     "dense_model": DENSE_MODELS[0],
-    "openai_embedding_model_name": OPENAI_EMBEDDING_MODELS[0],
+    "openai_embedding_model_name": model_catalog.FALLBACK_EMBEDDING_MODELS[0],
     "bm25_language": BM25_LANGUAGES[0],
     "bm25_stemming": False,
     "bm25_stopwords_mode": STOPWORD_MODES[0],
@@ -54,7 +50,7 @@ DEFAULTS = {
     "contextual_compression": False,
     "chunk_positioning": False,
     "provider": PROVIDERS[0],
-    "model": MODELS[PROVIDERS[0]][0],
+    "model": model_catalog.FALLBACK_CHAT_MODELS[PROVIDERS[0]][0],
     "max_tokens": 4000,
     "anthropic_api_key": ANTHROPIC_API_KEY or "",
     "openai_api_key": OPENAI_API_KEY or "",
@@ -95,8 +91,33 @@ def retrieval_label(config: dict) -> str:
     return " + ".join(parts)
 
 
-def reset_model():
-    st.session_state.model = MODELS[st.session_state.provider][0]
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_chat_models(provider: str, api_key: str) -> list[str]:
+    return model_catalog.fetch_chat_models(provider, api_key)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_embedding_models(api_key: str) -> list[str]:
+    return model_catalog.fetch_embedding_models(api_key)
+
+
+def live_or_fallback(fetch, api_key: str, fallback: list[str]) -> tuple[list[str], str]:
+    """(options, note about where they came from). Lists are fetched from the
+    provider once an hour per key; failures are not cached, so a fixed key
+    works on the next rerun."""
+    if not api_key:
+        return fallback, "Built-in list. Add an API key to load the current models."
+    try:
+        return fetch(api_key) or fallback, "Live list from the provider, refreshed hourly."
+    except Exception as e:
+        return fallback, f"Built-in list, could not load the live one ({type(e).__name__})."
+
+
+def select_model(label: str, key: str, options: list[str], fallback: list[str], note: str):
+    """Selectbox over a model list that can change between runs."""
+    if st.session_state[key] not in options:
+        st.session_state[key] = model_catalog.default_model(options, fallback)
+    st.selectbox(label, options, key=key, help=note)
 
 
 def usage_summary(usage: list[dict]) -> list[str]:
@@ -205,7 +226,10 @@ with st.sidebar:
         if st.session_state.retrieval_mode in pipeline.DENSE_MODES:
             st.selectbox("Embedding model", DENSE_MODELS, key="dense_model")
             if st.session_state.dense_model == OPENAI_EMBEDDING:
-                st.selectbox("OpenAI embedding model", OPENAI_EMBEDDING_MODELS, key="openai_embedding_model_name")
+                embedding_models, note = live_or_fallback(
+                    _fetch_embedding_models, st.session_state.openai_api_key, model_catalog.FALLBACK_EMBEDDING_MODELS,
+                )
+                select_model("OpenAI embedding model", "openai_embedding_model_name", embedding_models, model_catalog.FALLBACK_EMBEDDING_MODELS, note)
 
         if st.session_state.retrieval_mode in pipeline.SPARSE_MODES:
             st.selectbox("BM25 language", BM25_LANGUAGES, key="bm25_language")
@@ -274,11 +298,16 @@ with st.sidebar:
         )
 
     st.caption("LLM")
-    if st.session_state.model not in MODELS[st.session_state.provider]:
-        reset_model()
+    fallback_models = model_catalog.FALLBACK_CHAT_MODELS[st.session_state.provider]
+    chat_models, models_note = live_or_fallback(
+        lambda key: _fetch_chat_models(st.session_state.provider, key), api_key, fallback_models,
+    )
+    if st.session_state.model not in chat_models:  # provider or list changed
+        st.session_state.model = model_catalog.default_model(chat_models, fallback_models)
     with st.expander(f"{st.session_state.model} (max_tokens={st.session_state.max_tokens})", expanded=True):
-        st.selectbox("Provider", PROVIDERS, key="provider", on_change=reset_model)
-        st.selectbox("Model", MODELS[st.session_state.provider], key="model")
+        st.selectbox("Provider", PROVIDERS, key="provider")
+        select_model("Model", "model", chat_models, fallback_models, models_note)
+        st.caption(models_note)
         st.number_input("Max tokens", min_value=500, step=500, key="max_tokens")
 
     # Always rendered (never inside a condition) so Streamlit keeps the keys in session state

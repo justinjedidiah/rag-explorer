@@ -106,6 +106,14 @@ Runs on the retrieved chunks before they go to the LLM.
 
 ---
 
+### LLM
+
+Claude or OpenAI. With an API key set, the model dropdown is loaded live from the provider (refreshed hourly), so new models appear without updating the app. Without a key, or when the provider cannot be reached, a short built-in list is shown. The OpenAI embedding model dropdown works the same way.
+
+OpenAI lists every kind of model in one place, so chat models are picked out by name. If a model in the dropdown turns out not to support chat, the error shows up in the chat instead of crashing the app.
+
+---
+
 ## The debug panel
 
 Every question shows a full trace of what happened:
