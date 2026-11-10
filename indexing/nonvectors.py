@@ -4,6 +4,13 @@ from typing import TypedDict
 
 STOPWORDS_LANG_BM25 = ["english", "en","english_plus", "en_plus","german", "de","dutch", "nl","french", "fr","spanish", "es","portuguese", "pt","italian", "it","russian", "ru","swedish", "sv","norwegian", "no","chinese", "zh","turkish", "tr"]
 
+# bm25s accepts short codes and "english_plus" for stopwords; PyStemmer only knows full names
+_STEMMER_LANGUAGE = {
+    "en": "english", "english_plus": "english", "en_plus": "english", "de": "german",
+    "nl": "dutch", "fr": "french", "es": "spanish", "pt": "portuguese", "it": "italian",
+    "ru": "russian", "sv": "swedish", "no": "norwegian", "tr": "turkish",
+}
+
 class BM25IndexerParams(TypedDict):
     language: str
     stemming: bool
@@ -17,10 +24,12 @@ class BM25SModdedCollection:
     metadatas: list[dict]
 class BM25Indexer:
     def __init__(self, language: str, stemming: bool, stopwords: list|str):
-        if stemming and language in Stemmer.algorithms():
+        self.stemmer = None
+        if stemming:
+            language = _STEMMER_LANGUAGE.get(language, language)
+            if language not in Stemmer.algorithms():
+                raise ValueError(f"No stemmer available for '{language}'. Turn stemming off or pick another language.")
             self.stemmer = Stemmer.Stemmer(language)
-        else:
-            self.stemmer = None
         self.stopwords = stopwords
     
     def process_chunks(self, chunks: list[dict]) -> bm25s.tokenization.Tokenized:

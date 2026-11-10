@@ -58,11 +58,14 @@ def retrieveBM25SCollection(
 
     results, scores = collection.retrieve(
         query_tokens=q_tokens,
-        k=n_chunks,
+        k=min(n_chunks, len(chunk_ids)),  # bm25s raises when k exceeds the corpus size
+        show_progress=False,
     )
 
     chunks = []
     for idx, score in zip(results[0], scores[0]):
+        if score <= 0:  # no query term matched this chunk
+            continue
         chunks.append({
             "chunk_id": chunk_ids[idx],
             "text": chunk_texts[idx],
