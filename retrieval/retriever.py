@@ -72,3 +72,24 @@ def retrieveBM25SCollection(
             "parent_id": metadatas[idx]["parent_id"] or None,
         })
     return chunks
+
+def merge_results(results_per_query: list[list[dict]], n_chunks: int) -> list[dict]:
+    """Merge the result lists of several queries into one list of n_chunks.
+
+    Takes chunks round-robin (best of query 1, best of query 2, ...) so every
+    query contributes, and keeps the highest score for chunks found twice.
+    """
+    best = {}
+    for found in results_per_query:
+        for chunk in found:
+            seen = best.get(chunk["chunk_id"])
+            if seen is None or chunk["score"] > seen["score"]:
+                best[chunk["chunk_id"]] = chunk
+
+    merged, taken = [], set()
+    for rank in range(max((len(f) for f in results_per_query), default=0)):
+        for found in results_per_query:
+            if rank < len(found) and found[rank]["chunk_id"] not in taken:
+                taken.add(found[rank]["chunk_id"])
+                merged.append(best[found[rank]["chunk_id"]])
+    return merged[:n_chunks]

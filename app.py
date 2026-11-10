@@ -9,7 +9,7 @@ from indexing.indexers import get_indexer
 from indexing.vectorstore import load_index, cleanup_old_collections
 from indexing.vectors import SentenceTransformerIndexerParams, OpenAIIndexerParams
 from indexing.nonvectors import BM25IndexerParams, STOPWORDS_LANG_BM25
-from retrieval.retriever import retrieve
+from retrieval.retriever import retrieve, merge_results
 from generation.generator import generate
 from query.handler import handle_query
 from generation.generator import quick_llm
@@ -350,7 +350,7 @@ with col_chat:
                 query_result = handle_query(question, st.session_state.query_strategy, llm_fn)
                 
                 # retrieve for each query, merge results
-                all_chunks = {}
+                results_per_query = []
                 query_chunk_map = {}  # sub_question → [chunk_ids]
 
                 for q in query_result["queries"]:
@@ -358,11 +358,9 @@ with col_chat:
                                     st.session_state.retrieval_n_chunks,
                                     st.session_state.indexer,
                                     st.session_state.retrieval_model)
-                    query_chunk_map[q] = []
-                    for chunk in found:
-                        all_chunks[chunk["chunk_id"]] = chunk # deduplicate by id
-                        query_chunk_map[q].append(chunk["chunk_id"])
-                chunks_found = list(all_chunks.values())[:st.session_state.retrieval_n_chunks]
+                    results_per_query.append(found)
+                    query_chunk_map[q] = [chunk["chunk_id"] for chunk in found]
+                chunks_found = merge_results(results_per_query, st.session_state.retrieval_n_chunks)
             if st.session_state.enable_generation and has_api_key:
                 with st.spinner("Generating..."):
                     answer = generate(question, chunks_found, st.session_state.provider, st.session_state.model, st.session_state.max_tokens, (st.session_state.anthropic_api_key if st.session_state.provider == "claude" else st.session_state.openai_api_key))
