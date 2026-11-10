@@ -15,8 +15,9 @@ import pipeline
 from conftest import DEFAULT_SETTINGS, FakeLLM, make_pdf
 
 APP = str(Path(__file__).parent.parent / "app.py")
+BUILT_IN_OPENAI = generation.models.FALLBACK_CHAT_MODELS["openai"]
 LIVE_CHAT_MODELS = {
-    "openai": ["gpt-9", "gpt-4o-mini", "gpt-4o"],
+    "openai": ["gpt-9", "gpt-6-luna", "gpt-4o"],
     "claude": ["claude-next-1", "claude-haiku-5-5"],
 }
 LIVE_EMBEDDING_MODELS = ["text-embedding-9", "text-embedding-3-small"]
@@ -69,7 +70,7 @@ def test_starts_without_keys_or_document():
     at = run_app()
     assert at.chat_input[0].disabled
     assert at.selectbox(key="query_strategy").options == ["None (raw question)"]
-    assert at.selectbox(key="model").options == ["gpt-4o-mini", "gpt-4o"]  # built-in list
+    assert at.selectbox(key="model").options == BUILT_IN_OPENAI  # built-in list
 
 
 @pytest.mark.parametrize("mode", ["Dense", "Sparse", "Hybrid"])
@@ -174,7 +175,7 @@ def test_question_index_hides_hyde(build):
 def test_model_list_comes_from_the_provider_when_a_key_is_set():
     at = run_app(openai_api_key="fake")
     assert at.selectbox(key="model").options == LIVE_CHAT_MODELS["openai"]
-    assert at.session_state["model"] == "gpt-4o-mini"  # default stays the built-in first choice
+    assert at.session_state["model"] == "gpt-6-luna"  # the built-in default, not the newest model
 
 
 def test_switching_provider_switches_the_model_list():
@@ -191,7 +192,7 @@ def test_model_list_falls_back_when_the_provider_cannot_be_reached(monkeypatch):
 
     monkeypatch.setattr(generation.models, "fetch_chat_models", unreachable)
     at = run_app(openai_api_key="fake")
-    assert at.selectbox(key="model").options == ["gpt-4o-mini", "gpt-4o"]
+    assert at.selectbox(key="model").options == BUILT_IN_OPENAI
     assert any("could not load the live one (ConnectionError)" in c.value for c in at.caption)
 
 

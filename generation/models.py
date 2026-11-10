@@ -8,7 +8,7 @@ import re
 
 FALLBACK_CHAT_MODELS = {
     "claude": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
-    "openai": ["gpt-4o-mini", "gpt-4o"],
+    "openai": ["gpt-6-luna", "gpt-4o-mini", "gpt-4o"],
 }
 FALLBACK_EMBEDDING_MODELS = ["text-embedding-3-small", "text-embedding-3-large"]
 
