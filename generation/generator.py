@@ -56,9 +56,10 @@ class LLM:
 
 
 def chunk_text_for_llm(chunk: dict) -> str:
-    """The text of a chunk that is sent to the LLM: the parent paragraph when
-    hierarchical chunking is used, otherwise the chunk itself."""
-    return chunk.get("parent_text") or chunk["text"]
+    """The text of a chunk that is sent to the LLM: its compressed version if
+    contextual compression ran, else the parent paragraph when hierarchical
+    chunking is used, else the chunk itself."""
+    return chunk.get("compressed_text") or chunk.get("parent_text") or chunk["text"]
 
 
 def build_prompt(question: str, chunks: list[dict]) -> str:

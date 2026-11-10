@@ -50,6 +50,9 @@ DEFAULTS = {
     "rerank": False,
     "rerank_candidates": 20,
     "query_strategy": QUERY_STRATEGIES[0],
+    "corrective_rag": False,
+    "contextual_compression": False,
+    "chunk_positioning": False,
     "provider": PROVIDERS[0],
     "model": MODELS[PROVIDERS[0]][0],
     "max_tokens": 4000,
@@ -249,10 +252,26 @@ with st.sidebar:
         )
 
     st.caption("Post retrieval")
-    with st.expander("Upcoming feature!", expanded=False):
-        st.checkbox("Corrective RAG", disabled=True)
-        st.checkbox("Contextual compression", disabled=True)
-        st.checkbox("Chunk positioning", disabled=True)
+    if not llm_on:
+        st.session_state.corrective_rag = False
+        st.session_state.contextual_compression = False
+    post_steps = [
+        name for name, key in (("Corrective RAG", "corrective_rag"), ("Compression", "contextual_compression"), ("Positioning", "chunk_positioning"))
+        if st.session_state[key]
+    ]
+    with st.expander(" + ".join(post_steps) or "None", expanded=False):
+        st.checkbox(
+            "Corrective RAG", key="corrective_rag", disabled=not llm_on,
+            help="The LLM judges each retrieved chunk and drops the ones that do not help answer the question. One extra LLM call.",
+        )
+        st.checkbox(
+            "Contextual compression", key="contextual_compression", disabled=not llm_on,
+            help="The LLM cuts each chunk down to the sentences relevant to the question. One extra LLM call per chunk.",
+        )
+        st.checkbox(
+            "Chunk positioning", key="chunk_positioning",
+            help="Order the chunks so the best ones are first and last in the prompt and the weakest sit in the middle.",
+        )
 
     st.caption("LLM")
     if st.session_state.model not in MODELS[st.session_state.provider]:
@@ -388,13 +407,26 @@ with col_debug:
                         if chunk["chunk_id"] in ids:
                             st.caption(f"↳ from: {q}")
 
+                # one tab per version of the chunk; the last one is what the LLM received
+                versions = {"Matched": chunk["text"]}
                 if chunk.get("parent_text"):
-                    tab_child, tab_parent = st.tabs(["Matched (child)", "Sent to LLM (parent)"])
-                    with tab_child.container(height=120):
+                    versions = {"Matched (child)": chunk["text"], "Parent": chunk["parent_text"]}
+                if chunk.get("compressed_text"):
+                    versions["Compressed"] = chunk["compressed_text"]
+                if len(versions) == 1:
+                    with st.container(height=120):
                         st.text(chunk["text"])
-                    with tab_parent.container(height=120):
-                        st.text(chunk["parent_text"])
                 else:
+                    labels = list(versions)
+                    labels[-1] += " → sent to LLM"
+                    for tab, text in zip(st.tabs(labels), versions.values()):
+                        with tab.container(height=120):
+                            st.text(text)
+
+        if debug["dropped_chunks"]:
+            with st.expander(f"🗑️ Dropped by Corrective RAG ({len(debug['dropped_chunks'])})", expanded=False):
+                for chunk in debug["dropped_chunks"]:
+                    st.markdown(f"Page {chunk['page']} — {score_badge(chunk)}")
                     with st.container(height=120):
                         st.text(chunk["text"])
 

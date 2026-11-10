@@ -9,6 +9,7 @@ from indexing.questions import generate_question_entries
 from indexing.indexers import get_dense_indexer, get_sparse_indexer, OPENAI_EMBEDDING
 from retrieval.retriever import search, merge_results
 from retrieval.reranker import rerank
+from retrieval.postprocess import corrective_filter, compress, reposition
 from query.handler import handle_query, NO_STRATEGY
 from generation.generator import LLM, generate
 
@@ -148,6 +149,26 @@ def answer_question(question: str, index: dict, settings: dict, llm: LLM | None)
     else:
         step("Reranker", False, "disabled")
 
+    dropped = []
+    if settings["corrective_rag"] and llm:
+        chunks, dropped = corrective_filter(question, chunks, llm)
+        step("Corrective RAG", True, f"kept {len(chunks)}, dropped {len(dropped)} as irrelevant")
+    else:
+        step("Corrective RAG", False, "needs the LLM" if settings["corrective_rag"] else "disabled")
+
+    if settings["contextual_compression"] and llm:
+        chunks = compress(question, chunks, llm)
+        n_compressed = sum(1 for c in chunks if c.get("compressed_text"))
+        step("Contextual compression", True, f"compressed {n_compressed} of {len(chunks)} chunks")
+    else:
+        step("Contextual compression", False, "needs the LLM" if settings["contextual_compression"] else "disabled")
+
+    if settings["chunk_positioning"]:
+        chunks = reposition(chunks)
+        step("Chunk positioning", True, "best chunks first and last, weakest in the middle")
+    else:
+        step("Chunk positioning", False, "disabled")
+
     answer = None
     if llm:
         answer = generate(question, chunks, llm, settings["max_tokens"])
@@ -162,6 +183,7 @@ def answer_question(question: str, index: dict, settings: dict, llm: LLM | None)
             "query_display": query_result["display"],
             "query_chunk_map": query_chunk_map,
             "chunks": chunks,
+            "dropped_chunks": dropped,
             "steps": steps,
             "llm_usage": llm.usage if llm else [],
         },
