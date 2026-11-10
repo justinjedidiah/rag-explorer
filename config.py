@@ -11,4 +11,4 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Storage
-CHROMA_PATH = ".chroma_db"
+CHROMA_PATH = os.getenv("CHROMA_PATH", ".chroma_db")

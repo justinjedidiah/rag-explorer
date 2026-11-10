@@ -142,6 +142,23 @@ generation/             LLM wrapper (Claude and OpenAI) with token tracking
 
 ---
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+The tests never call a paid API: the LLM is replaced by a fake and only local models are used. They ignore the keys in your `.env` and use a temporary Chroma folder. The first run downloads all-MiniLM-L6-v2 and the reranker from Hugging Face.
+
+| File | Covers |
+|---|---|
+| `tests/test_units.py` | Chunking, result merging, BM25, parsing LLM replies, the model name filter |
+| `tests/test_pipeline.py` | Indexing and answering in every retrieval mode, query strategy and post-retrieval step |
+| `tests/test_app.py` | The Streamlit app run headlessly: sidebar, chat, upload and index, model lists, error handling |
+
+---
+
 ## Not built yet
 
 - RAGAS evaluation
