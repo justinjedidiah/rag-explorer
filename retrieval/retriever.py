@@ -1,80 +1,56 @@
-from indexing.indexers import IndexerClasses
-from indexing.nonvectors import BM25SModdedCollection
+"""Search an index built by pipeline.build_index.
 
-def retrieve(
-    question: str,
-    collection,
-    n_chunks: int,
-    indexer: IndexerClasses,
-    retrieval_model: str,
-) -> list[dict]:
-    if retrieval_model == "BM25":
-        chunks = retrieveBM25SCollection(question,collection,n_chunks,indexer)
-    else:
-        chunks = retrieveChromaCollection(question,collection,n_chunks,indexer)
-    return chunks
+Every function returns chunks as dicts:
+  {"chunk_id", "text", "page", "score", "score_type", "parent_text", "parent_id"}
+score_type says what the number means: "cosine" (0-1 similarity) or "bm25" (unbounded).
+"""
 
-def retrieveChromaCollection(
-    question: str,
-    collection,
-    n_chunks: int,
-    indexer: IndexerClasses,
-) -> list[dict]:
-    q_vec = indexer.process_query(question)
+
+def _to_chunk(chunk_id: str, text: str, metadata: dict, score: float, score_type: str) -> dict:
+    return {
+        "chunk_id": chunk_id,
+        "text": text,
+        "page": metadata["page"],
+        "score": round(float(score), 4),
+        "score_type": score_type,
+        "parent_text": metadata["parent_text"] or None,
+        "parent_id": metadata["parent_id"] or None,
+    }
+
+
+def search_dense(dense: dict, query: str, k: int) -> list[dict]:
+    collection = dense["store"]
     results = collection.query(
-        query_embeddings=q_vec,
-        n_results=n_chunks,
+        query_embeddings=[dense["indexer"].process_query(query)],
+        n_results=min(k, collection.count()),
     )
+    return [
+        _to_chunk(chunk_id, text, metadata, 1 - distance, "cosine")
+        for chunk_id, text, metadata, distance in zip(
+            results["ids"][0], results["documents"][0], results["metadatas"][0], results["distances"][0]
+        )
+    ]
 
-    chunks = []
-    for id, text, metadata, distance in zip(
-        results["ids"][0],
-        results["documents"][0],
-        results["metadatas"][0],
-        results["distances"][0],
-    ):
-        chunks.append({
-            "chunk_id": id,
-            "text": text,
-            "page": metadata["page"],
-            "score": round(1 - distance, 4),
-            "parent_text": metadata["parent_text"] or None,
-            "parent_id": metadata["parent_id"] or None,
-        })
-    return chunks
 
-def retrieveBM25SCollection(
-    question: str,
-    modded_collection: BM25SModdedCollection,
-    n_chunks: int,
-    indexer: IndexerClasses,
-) -> list[dict]:
-    q_tokens = indexer.process_query(question)
-
-    collection = modded_collection["collection"]
-    chunk_ids = modded_collection["ids"]
-    metadatas = modded_collection["metadatas"]
-    chunk_texts = modded_collection["chunk_texts"]
-
-    results, scores = collection.retrieve(
-        query_tokens=q_tokens,
-        k=min(n_chunks, len(chunk_ids)),  # bm25s raises when k exceeds the corpus size
+def search_sparse(sparse: dict, query: str, k: int) -> list[dict]:
+    store = sparse["store"]
+    results, scores = store["bm25"].retrieve(
+        sparse["indexer"].process_query(query),
+        k=min(k, len(store["ids"])),  # bm25s raises when k exceeds the corpus size
         show_progress=False,
     )
+    return [
+        _to_chunk(store["ids"][idx], store["texts"][idx], store["metadatas"][idx], score, "bm25")
+        for idx, score in zip(results[0], scores[0])
+        if score > 0  # 0 means no query term matched this chunk
+    ]
 
-    chunks = []
-    for idx, score in zip(results[0], scores[0]):
-        if score <= 0:  # no query term matched this chunk
-            continue
-        chunks.append({
-            "chunk_id": chunk_ids[idx],
-            "text": chunk_texts[idx],
-            "page": metadatas[idx]["page"],
-            "score": float(score),
-            "parent_text": metadatas[idx]["parent_text"] or None,
-            "parent_id": metadatas[idx]["parent_id"] or None,
-        })
-    return chunks
+
+def search(index: dict, query: str, k: int) -> list[dict]:
+    if index["dense"]:
+        return search_dense(index["dense"], query, k)
+    return search_sparse(index["sparse"], query, k)
+
 
 def merge_results(results_per_query: list[list[dict]], n_chunks: int) -> list[dict]:
     """Merge the result lists of several queries into one list of n_chunks.

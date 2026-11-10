@@ -1,57 +1,38 @@
 import bm25s
 import Stemmer
-from typing import TypedDict
+from indexing.vectorstore import chunk_metadata
 
-STOPWORDS_LANG_BM25 = ["english", "en","english_plus", "en_plus","german", "de","dutch", "nl","french", "fr","spanish", "es","portuguese", "pt","italian", "it","russian", "ru","swedish", "sv","norwegian", "no","chinese", "zh","turkish", "tr"]
+# Languages that have both a bm25s stopword list and a PyStemmer stemmer
+BM25_LANGUAGES = ["english", "german", "dutch", "french", "spanish", "portuguese", "italian", "russian", "swedish", "norwegian", "turkish"]
 
-# bm25s accepts short codes and "english_plus" for stopwords; PyStemmer only knows full names
-_STEMMER_LANGUAGE = {
-    "en": "english", "english_plus": "english", "en_plus": "english", "de": "german",
-    "nl": "dutch", "fr": "french", "es": "spanish", "pt": "portuguese", "it": "italian",
-    "ru": "russian", "sv": "swedish", "no": "norwegian", "tr": "turkish",
-}
 
-class BM25IndexerParams(TypedDict):
-    language: str
-    stemming: bool
-    stopwords: list|str
-
-class BM25SModdedCollection:
-    """Adding chunk texts and metadata because bm25s.BM25 only store the indices"""
-    ids: list[str]
-    collection: bm25s.BM25
-    chunk_texts: list[str]
-    metadatas: list[dict]
 class BM25Indexer:
-    def __init__(self, language: str, stemming: bool, stopwords: list|str):
+    usage: list[dict] = []  # BM25 costs no tokens; kept so every indexer exposes .usage
+
+    def __init__(self, language: str, stemming: bool, stopwords: list | str | None):
         self.stemmer = None
         if stemming:
-            language = _STEMMER_LANGUAGE.get(language, language)
             if language not in Stemmer.algorithms():
                 raise ValueError(f"No stemmer available for '{language}'. Turn stemming off or pick another language.")
             self.stemmer = Stemmer.Stemmer(language)
         self.stopwords = stopwords
-    
-    def process_chunks(self, chunks: list[dict]) -> bm25s.tokenization.Tokenized:
-        corpus = [c["text"] for c in chunks]
-        corpus_tokens = bm25s.tokenize(corpus, stopwords=self.stopwords, stemmer=self.stemmer)
-        return corpus_tokens
-    
-    def build_index(self, chunks: list[dict], corpus_tokens: bm25s.tokenization.Tokenized) -> BM25SModdedCollection:
-        collection = bm25s.BM25()
-        collection.index(corpus_tokens)
-        chunk_ids = [c["chunk_id"] for c in chunks]
-        chunk_texts = [c["text"] for c in chunks]
-        metadatas=[{
-            "page": c["page"],
-            "parent_text": c.get("parent_text") or "",
-            "parent_id": c.get("parent_id") or "",
-        } for c in chunks]
-        modded_collection = {"ids": chunk_ids, "collection": collection, "chunk_texts": chunk_texts, "metadatas": metadatas}
-        return modded_collection
 
-    def load_index(self, session_id: str) -> None:
-        return None
+    def _tokenize(self, texts):
+        return bm25s.tokenize(texts, stopwords=self.stopwords, stemmer=self.stemmer, show_progress=False)
 
-    def process_query(self, query: str) -> bm25s.tokenization.Tokenized:
-        return bm25s.tokenize(query, stopwords=self.stopwords, stemmer=self.stemmer)
+    def process_chunks(self, chunks: list[dict]):
+        return self._tokenize([c["text"] for c in chunks])
+
+    def build_index(self, chunks: list[dict], corpus_tokens, session_id: str | None = None) -> dict:
+        """bm25s.BM25 only stores token indices, so keep ids, texts and metadata next to it."""
+        bm25 = bm25s.BM25()
+        bm25.index(corpus_tokens, show_progress=False)
+        return {
+            "bm25": bm25,
+            "ids": [c["chunk_id"] for c in chunks],
+            "texts": [c["text"] for c in chunks],
+            "metadatas": [chunk_metadata(c) for c in chunks],
+        }
+
+    def process_query(self, query: str):
+        return self._tokenize(query)

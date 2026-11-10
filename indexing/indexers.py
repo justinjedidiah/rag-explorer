@@ -1,24 +1,16 @@
-from indexing.vectors import SentenceTransformerIndexer, SentenceTransformerIndexerParams, OpenAIIndexer, OpenAIIndexerParams
-from indexing.nonvectors import BM25Indexer, BM25IndexerParams
-import json
+from indexing.vectors import SentenceTransformerIndexer, OpenAIIndexer
+from indexing.nonvectors import BM25Indexer
 
-IndexerClasses = OpenAIIndexer | SentenceTransformerIndexer | BM25Indexer
+OPENAI_EMBEDDING = "OpenAI Embedding"
 
-_indexers = {}
 
-def get_indexer(
-    retrieval_mode,
-    model_key,
-    params: SentenceTransformerIndexerParams|OpenAIIndexerParams|BM25IndexerParams,
-):
-    indexer_key = json.dumps(params, sort_keys=True) + model_key
-    if indexer_key not in _indexers:
-        if retrieval_mode == "Dense":
-            if model_key == "OpenAI Embedding":
-                _indexers[indexer_key] = OpenAIIndexer(**params)
-            else:
-                _indexers[indexer_key] = SentenceTransformerIndexer(**params)
-        elif retrieval_mode == "Sparse":
-            if model_key == "BM25":
-                _indexers[indexer_key] = BM25Indexer(**params)
-    return _indexers[indexer_key]
+def get_dense_indexer(config: dict, openai_api_key: str | None = None, hf_token: str | None = None):
+    if config["dense_model"] == OPENAI_EMBEDDING:
+        if not openai_api_key:
+            raise ValueError("OpenAI embeddings need an OpenAI API key (sidebar → API keys).")
+        return OpenAIIndexer(config["openai_embedding_model_name"], openai_api_key)
+    return SentenceTransformerIndexer(config["dense_model"], hf_token)
+
+
+def get_sparse_indexer(config: dict):
+    return BM25Indexer(config["bm25_language"], config["bm25_stemming"], config["bm25_stopwords"])

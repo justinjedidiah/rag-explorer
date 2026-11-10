@@ -1,17 +1,12 @@
 import streamlit as st
 from streamlit.runtime.scriptrunner import get_script_run_ctx
-import tempfile
-import os
-from config import ANTHROPIC_API_KEY, OPENAI_API_KEY
+from config import ANTHROPIC_API_KEY, OPENAI_API_KEY, HF_TOKEN
 from ingestion.loader import load_pdf
-from ingestion.chunker import chunk_documents
-from indexing.indexers import get_indexer
-from indexing.vectorstore import load_index, cleanup_old_collections
-from indexing.vectors import SentenceTransformerIndexerParams, OpenAIIndexerParams
-from indexing.nonvectors import BM25IndexerParams, STOPWORDS_LANG_BM25
-from retrieval.retriever import retrieve, merge_results
-from generation.generator import generate, LLM
-from query.handler import handle_query
+from indexing.indexers import OPENAI_EMBEDDING
+from indexing.nonvectors import BM25_LANGUAGES
+from query.handler import NO_STRATEGY
+from generation.generator import LLM
+import pipeline
 
 
 # PAGE CONFIG ---------------------------------------------------------------
@@ -21,292 +16,215 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# SESSION SETUPS ------------------------------------------------------------
+# OPTIONS AND DEFAULTS ------------------------------------------------------
+CHUNK_STRATEGIES = ["Fixed size", "Semantic", "Hierarchical"]
+RETRIEVAL_MODES = ["Dense", "Sparse"]
+DENSE_MODELS = ["all-MiniLM-L6-v2", "BAAI/bge-small-en-v1.5", "BAAI/bge-large-en-v1.5", OPENAI_EMBEDDING]
+OPENAI_EMBEDDING_MODELS = ["text-embedding-3-small", "text-embedding-3-large"]
+STOPWORD_MODES = ["None", "Language default", "Custom"]
+QUERY_STRATEGIES = [NO_STRATEGY, "Rewrite", "HyDE", "Decompose"]
+PROVIDERS = ["openai", "claude"]
+MODELS = {
+    "claude": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
+    "openai": ["gpt-4o-mini", "gpt-4o"],
+}
 
-session_id = get_script_run_ctx().session_id
-cleanup_old_collections(max_age_hours=24)
-# debug state if needed
-# st.write({k: v for k, v in dict(st.session_state).items() if k not in ('anthropic_api_key','openai_api_key','_tmp_anthropic_api_key','_tmp_openai_api_key')})
-
-if "collection" not in st.session_state:
-    st.session_state.collection = load_index(session_id)  # restore on refresh
-
-if "indexer" not in st.session_state:
-    st.session_state.indexer = None
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-if "doc_name" not in st.session_state:
-    st.session_state.doc_name = None
-
-if "last_debug" not in st.session_state:
-    st.session_state.last_debug = None
-
-chunk_strategy_options = ["Fixed size","Semantic","Hierarchical"]
-retrieval_mode_options = ["Dense","Sparse"]
-dense_retrieval_model_options = ["all-MiniLM-L6-v2","BAAI/bge-large-en-v1.5","OpenAI Embedding"]
-openai_embedding_model_options = ["text-embedding-3-small","text-embedding-3-large"]
-sparse_retrieval_model_options = ["BM25"]
-query_strategy_options = ["None (raw question)", "Rewrite", "HyDE", "Decompose"]
-provider_options = ["openai","claude"]
-model_options_claude = ["claude-haiku-4-5-20251001","claude-sonnet-4-6","claude-opus-4-6"]
-model_options_openai = ["gpt-4o-mini", "gpt-4o"]
-
+# Every setting lives in st.session_state under these keys; the widgets bind to them.
 DEFAULTS = {
     "enable_generation": True,
-    "chunk_strategy": chunk_strategy_options[0],
+    "chunk_strategy": CHUNK_STRATEGIES[0],
     "chunk_size": 500,
     "chunk_parent_size": 1000,
     "chunk_overlap": 30,
-    "chunk_count": None,
-    "retrieval_mode": retrieval_mode_options[0],
-    "retrieval_model": dense_retrieval_model_options[0], # dense because retrieval mode default is dense
-    "openai_embedding_model_name": openai_embedding_model_options[0],
-    "bm25_params": {"stemming": False, "language": None, "stopwords":None},
+    "retrieval_mode": RETRIEVAL_MODES[0],
+    "dense_model": DENSE_MODELS[0],
+    "openai_embedding_model_name": OPENAI_EMBEDDING_MODELS[0],
+    "bm25_language": BM25_LANGUAGES[0],
+    "bm25_stemming": False,
+    "bm25_stopwords_mode": STOPWORD_MODES[0],
+    "bm25_stopwords_custom": "",
     "retrieval_n_chunks": 5,
-    "query_strategy": query_strategy_options[0],
-    "provider": provider_options[0],
-    "anthropic_api_key": ANTHROPIC_API_KEY or None,
-    "openai_api_key": OPENAI_API_KEY or None,
-    "model": model_options_openai[0],
+    "query_strategy": QUERY_STRATEGIES[0],
+    "provider": PROVIDERS[0],
+    "model": MODELS[PROVIDERS[0]][0],
     "max_tokens": 4000,
+    "anthropic_api_key": ANTHROPIC_API_KEY or "",
+    "openai_api_key": OPENAI_API_KEY or "",
+    "hf_token": HF_TOKEN or "",
 }
 
-# initialize states
+# SESSION STATE -------------------------------------------------------------
+session_id = get_script_run_ctx().session_id
+
+# Streamlit drops the state of widgets that were not rendered in a run (e.g. the
+# BM25 options while in Dense mode), so this also restores those to their default.
 for key, val in DEFAULTS.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
-if "prev_provider" not in st.session_state:
-    st.session_state.prev_provider = st.session_state.provider
+for key, val in {"index": None, "doc_name": None, "messages": [], "last_debug": None}.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
 
-if st.session_state.provider != st.session_state.prev_provider:
-    if st.session_state.provider == "claude":
-        st.session_state.model = model_options_claude[0]
-    elif st.session_state.provider == "openai":
-        st.session_state.model = model_options_openai[0]
-    st.session_state.prev_provider = st.session_state.provider
 
+def score_badge(chunk: dict) -> str:
+    """Scores only get a traffic light when they are on a 0-1 relevance scale."""
+    score, score_type = chunk["score"], chunk.get("score_type", "cosine")
+    if score_type in ("cosine",):
+        icon = "🟢" if score >= 0.7 else "🟡" if score >= 0.4 else "🔴"
+    else:
+        icon = "⚪"
+    return f"{icon} {score_type} {score:.2f}"
+
+
+def retrieval_label(config: dict) -> str:
+    """Short name of the retrieval setup, e.g. 'all-MiniLM-L6-v2' or 'BM25'."""
+    parts = []
+    if config["retrieval_mode"] in pipeline.DENSE_MODES:
+        parts.append(config.get("openai_embedding_model_name") or config["dense_model"])
+    if config["retrieval_mode"] in pipeline.SPARSE_MODES:
+        parts.append("BM25")
+    return " + ".join(parts)
+
+
+def reset_model():
+    st.session_state.model = MODELS[st.session_state.provider][0]
+
+
+def index_document(uploaded, settings: dict):
+    try:
+        with st.status(f"Indexing {uploaded.name}...", expanded=True) as status:
+            status.write("Reading PDF...")
+            pages = load_pdf(uploaded.getvalue())
+            index = pipeline.build_index(
+                pages,
+                pipeline.index_config(settings),
+                session_id,
+                openai_api_key=settings["openai_api_key"],
+                hf_token=settings["hf_token"],
+                log=status.write,
+            )
+    except Exception as e:
+        st.error(f"Indexing failed: {e}")
+        return
+
+    st.session_state.index = index
+    st.session_state.doc_name = uploaded.name
+    st.session_state.messages = []
+    st.session_state.last_debug = None
+    st.rerun()  # redraw the sidebar with the new index
+
+
+# SIDEBAR -------------------------------------------------------------------
 with st.sidebar:
     st.title("🔍 RAG Explorer")
 
-    st.caption("Generation")
     api_key = st.session_state.anthropic_api_key if st.session_state.provider == "claude" else st.session_state.openai_api_key
     has_api_key = bool(api_key)
-    st.toggle("Enable LLM Generation", 
+    current_config = pipeline.index_config({key: st.session_state[key] for key in DEFAULTS})
+    index = st.session_state.index
+
+    st.caption("Generation")
+    st.toggle(
+        "Enable LLM",
         key="enable_generation",
-        disabled=not has_api_key
+        disabled=not has_api_key,
+        help="Off (or no API key): no LLM calls are made, you only see the retrieved chunks.",
     )
+    llm_on = st.session_state.enable_generation and has_api_key
 
     st.caption("Document")
-    doc_side_label = f"{st.session_state.doc_name or "Upload document"}"
-    with st.expander(doc_side_label, expanded=True):
+    with st.expander(st.session_state.doc_name or "Upload document", expanded=True):
         uploaded = st.file_uploader("Upload a PDF to start", type=["pdf"])
 
-        if uploaded:
-            if st.button("Index Document", type="primary", use_container_width=True):
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                    tmp.write(uploaded.read())
-                    tmp_path = tmp.name
+        missing_openai_key = current_config.get("dense_model") == OPENAI_EMBEDDING and not st.session_state.openai_api_key
+        if missing_openai_key:
+            st.warning("OpenAI embeddings need an OpenAI API key (see API keys below).")
+        index_clicked = st.button(
+            "Index document", type="primary", width="stretch",
+            disabled=uploaded is None or missing_openai_key,
+        )
 
-                with st.spinner("Loading PDF..."):
-                    pages = load_pdf(tmp_path)
-                with st.spinner(f"Chunking ({len(pages)} pages)..."):
-                    if st.session_state.chunk_strategy == "Hierarchical" and st.session_state.chunk_parent_size <= st.session_state.chunk_size:
-                        st.error("Parent size must be larger than chunk size.")
-                        os.unlink(tmp_path)
-                        st.stop()
-                    if st.session_state.chunk_overlap >= st.session_state.chunk_size:
-                        st.error("Chunk overlap must be smaller than chunk size.")
-                        os.unlink(tmp_path)
-                        st.stop()
-                    chunks = chunk_documents(pages, st.session_state.chunk_strategy, size=st.session_state.chunk_size, overlap=st.session_state.chunk_overlap, parent_size=st.session_state.chunk_parent_size)
-                with st.spinner(f"Embedding ({len(chunks)} chunks)..."):
-                    if st.session_state.retrieval_mode == "Dense":
-                        if st.session_state.retrieval_model == "OpenAI Embedding":
-                            if not st.session_state.openai_api_key:
-                                st.warning("To use openai embedding models, you need to input an api key in the generation settings")
-                                st.text_input(
-                                    "OpenAI API key",
-                                    type="password",
-                                    key="openai_api_key",
-                                    on_change=st.rerun
-                                )
-                                st.stop()
-                            retrieval_params: OpenAIIndexerParams = {
-                                "model_name": st.session_state.openai_embedding_model_name,
-                                "api_key": st.session_state.openai_api_key,
-                            }
-                        else:
-                            retrieval_params: SentenceTransformerIndexerParams = {
-                                "model_name": st.session_state.retrieval_model,
-                                "hf_token": None, # TODO add hf token input
-                            }
-                    elif st.session_state.retrieval_mode == "Sparse":
-                        if st.session_state.retrieval_model == "BM25":
-                            retrieval_params : BM25IndexerParams = st.session_state.bm25_params
-                    indexer = get_indexer(
-                        retrieval_mode=st.session_state.retrieval_mode,
-                        model_key=st.session_state.retrieval_model,
-                        params=retrieval_params
-                    )
-                    processed_chunks = indexer.process_chunks(chunks)
-                with st.spinner("Building index..."):
-                    if st.session_state.retrieval_mode == "Dense":
-                        build_index_params = {
-                            "chunks": chunks,
-                            "vectors": processed_chunks,
-                            "session_id": session_id
-                        }
-                    elif st.session_state.retrieval_mode == "Sparse":
-                        if st.session_state.retrieval_model == "BM25":
-                            build_index_params = {
-                                "chunks": chunks,
-                                "corpus_tokens": processed_chunks
-                            }
-                    collection = indexer.build_index(**build_index_params)
-
-                os.unlink(tmp_path)
-                st.session_state.collection = collection
-                st.session_state.indexer = indexer
-                st.session_state.doc_name = uploaded.name
-                st.session_state.chunk_count = len(chunks)
-                st.session_state.messages = []
-                st.session_state.last_debug = None
-
-                # rescue states before rerun, some states will be missing after rerun because it only keeps states used in expander for some reason
-                for key, val in DEFAULTS.items():
-                    if key != "enable_generation":  # widget manages this itself
-                        st.session_state[key] = st.session_state.get(key, val)
-
-                st.rerun()
-
-        if st.session_state.collection:
-            st.success(f"✓ {st.session_state.doc_name or 'Document indexed'}")
-            st.caption(f"{st.session_state.chunk_count} {st.session_state.chunk_strategy} chunks")
+        if index:
+            st.success(f"✓ {st.session_state.doc_name}")
+            st.caption(f"{index['chunk_count']} {index['config']['chunk_strategy']} chunks · {retrieval_label(index['config'])}")
+            if current_config != index["config"]:
+                st.warning("Chunking or retrieval settings changed since indexing. Index the document again to apply them.")
 
     st.caption("Chunking")
-    chunk_side_label = f"{st.session_state.chunk_strategy} chunking (size={st.session_state.chunk_size}{f", parent_size={st.session_state.chunk_parent_size}" if st.session_state.chunk_strategy == "Hierarchical" else ""}, overlap={st.session_state.chunk_overlap})"
+    chunk_side_label = f"{st.session_state.chunk_strategy} chunking (size={st.session_state.chunk_size}"
+    if st.session_state.chunk_strategy == "Hierarchical":
+        chunk_side_label += f", parent_size={st.session_state.chunk_parent_size}"
+    chunk_side_label += f", overlap={st.session_state.chunk_overlap})"
     with st.expander(chunk_side_label, expanded=True):
-        st.selectbox("Chunking Strategy", chunk_strategy_options, key="chunk_strategy")
-        st.number_input("Chunk Size", min_value=1, key='chunk_size')
-        st.number_input("Parent Chunk Size", min_value=2, key="chunk_parent_size", disabled=(st.session_state.chunk_strategy != "Hierarchical"))
-        st.number_input("Chunk Overlap", min_value=0, key='chunk_overlap')
+        st.selectbox("Chunking strategy", CHUNK_STRATEGIES, key="chunk_strategy")
+        st.number_input("Chunk size", min_value=1, key="chunk_size")
+        st.number_input("Parent chunk size", min_value=2, key="chunk_parent_size", disabled=(st.session_state.chunk_strategy != "Hierarchical"))
+        st.number_input("Chunk overlap", min_value=0, key="chunk_overlap")
+        if st.session_state.chunk_overlap >= st.session_state.chunk_size:
+            st.error("Chunk overlap must be smaller than chunk size.")
+        if st.session_state.chunk_strategy == "Hierarchical" and st.session_state.chunk_parent_size <= st.session_state.chunk_size:
+            st.error("Parent size must be larger than chunk size.")
 
-    st.caption("Embedding and Retrieval")
-    retrieval_side_name = f"{st.session_state.retrieval_model} (n_chunks={st.session_state.retrieval_n_chunks})"
-    with st.expander(retrieval_side_name, expanded=True):
-        st.selectbox("Retrieval Mode", retrieval_mode_options, key="retrieval_mode")
+    st.caption("Embedding and retrieval")
+    with st.expander(f"{retrieval_label(current_config)} (n_chunks={st.session_state.retrieval_n_chunks})", expanded=True):
+        st.selectbox("Retrieval mode", RETRIEVAL_MODES, key="retrieval_mode")
 
-        if st.session_state.retrieval_mode == "Dense":
-            st.session_state.bm25_params = DEFAULTS["bm25_params"]
-            retrieval_model_options = dense_retrieval_model_options
-        elif st.session_state.retrieval_mode == "Sparse":
-            retrieval_model_options = sparse_retrieval_model_options
-        st.selectbox("Model", retrieval_model_options, key="retrieval_model")
+        if st.session_state.retrieval_mode in pipeline.DENSE_MODES:
+            st.selectbox("Embedding model", DENSE_MODELS, key="dense_model")
+            if st.session_state.dense_model == OPENAI_EMBEDDING:
+                st.selectbox("OpenAI embedding model", OPENAI_EMBEDDING_MODELS, key="openai_embedding_model_name")
 
-        if st.session_state.retrieval_model == "OpenAI Embedding":
-            st.selectbox("OpenAI Embedding Models", openai_embedding_model_options, key="openai_embedding_model_name")
+        if st.session_state.retrieval_mode in pipeline.SPARSE_MODES:
+            st.selectbox("BM25 language", BM25_LANGUAGES, key="bm25_language")
+            st.toggle("BM25 stemming", key="bm25_stemming")
+            st.selectbox("BM25 stopwords", STOPWORD_MODES, key="bm25_stopwords_mode")
+            if st.session_state.bm25_stopwords_mode == "Custom":
+                st.text_input("Custom stopwords (comma separated)", key="bm25_stopwords_custom")
 
-        elif st.session_state.retrieval_model == "BM25":
-            st.session_state.bm25_params.update({"language": st.session_state.get("_tmp_bm25_language", STOPWORDS_LANG_BM25[0])})
-            st.selectbox("BM25 Language", STOPWORDS_LANG_BM25, key="_tmp_bm25_language",
-                on_change=lambda: st.session_state.bm25_params.update({"language": st.session_state._tmp_bm25_language})
-            )
-            st.session_state.bm25_params.update({"stemming": st.session_state.get("_tmp_bm25_stemming", False)})
-            st.toggle("BM25 Stemming", key="_tmp_bm25_stemming",
-                on_change=lambda: st.session_state.bm25_params.update({"stemming": st.session_state._tmp_bm25_stemming})
-            )
-            def clear_bm25_stopwords():
-                if st.session_state._tmp_bm25_stopwords_toggle:
-                    st.session_state.bm25_params.update({"stopwords": st.session_state.get("_tmp_bm25_stopwords_defined", STOPWORDS_LANG_BM25[0])})
-                else:
-                    st.session_state.bm25_params.update({"stopwords": None})
-            st.toggle("BM25 Stopwords", key="_tmp_bm25_stopwords_toggle", on_change=clear_bm25_stopwords)
-            if st.session_state._tmp_bm25_stopwords_toggle:
-                st.toggle("Custom?", key="_tmp_bm25_stopwords_toggle_iscustom",on_change=clear_bm25_stopwords)
-                if not st.session_state._tmp_bm25_stopwords_toggle_iscustom:
-                    st.session_state.bm25_params.update({"stopwords": st.session_state.get("_tmp_bm25_stopwords_defined", STOPWORDS_LANG_BM25[0])})
-                    st.selectbox("BM25 Stopwords", STOPWORDS_LANG_BM25, key="_tmp_bm25_stopwords_defined",
-                        on_change=lambda: st.session_state.bm25_params.update({"stopwords": st.session_state._tmp_bm25_stopwords_defined})
-                    )
-                else:
-                    def split_stopwords(text, separator):
-                        splitted = text.split(separator)
-                        return [t.strip() for t in splitted]
-                    st.session_state.bm25_params.update({
-                        "stopwords": split_stopwords(
-                            st.session_state.get("_tmp_bm25_stopwords_custom", ""),
-                            st.session_state.get("_tmp_bm25_stopwords_custom_separator", ",")
-                        )
-                    })
-                    st.text_input("Separator", value=",", key="_tmp_bm25_stopwords_custom_separator")
-                    st.text_input("BM25 Stopwords", key="_tmp_bm25_stopwords_custom",
-                        on_change=lambda: st.session_state.bm25_params.update({
-                            "stopwords":(
-                                split_stopwords(
-                                    st.session_state._tmp_bm25_stopwords_custom,
-                                    st.session_state._tmp_bm25_stopwords_custom_separator
-                                )
-                            )
-                        })
-                    )
+        st.number_input("Chunks to retrieve", min_value=1, key="retrieval_n_chunks")
 
-        st.number_input("Chunks to Retrieve", min_value=1, key="retrieval_n_chunks")
-
-    st.caption("Query Strategy")
-    query_strategy_options_available = ["None (raw question)"]
-    if st.session_state.enable_generation and has_api_key:
-        query_strategy_options_available = query_strategy_options  # all options
-    query_strategy_side_name = f"{st.session_state.query_strategy}"
-    with st.expander(query_strategy_side_name, expanded=True):
-        st.selectbox("Query Strategy", query_strategy_options_available, key="query_strategy")
+    st.caption("Query strategy")
+    query_strategies_available = QUERY_STRATEGIES if llm_on else [NO_STRATEGY]
+    if st.session_state.query_strategy not in query_strategies_available:
+        st.session_state.query_strategy = NO_STRATEGY
+    with st.expander(st.session_state.query_strategy, expanded=True):
+        st.selectbox(
+            "Query strategy", query_strategies_available, key="query_strategy",
+            help=None if llm_on else "Rewrite, HyDE and Decompose need the LLM enabled.",
+        )
 
     st.caption("Post retrieval")
-    post_retrieval_side_name = "Upcoming feature!"
-    with st.expander(post_retrieval_side_name, expanded=False):
+    with st.expander("Upcoming feature!", expanded=False):
         st.checkbox("Corrective RAG", disabled=True)
         st.checkbox("Contextual compression", disabled=True)
         st.checkbox("Chunk positioning", disabled=True)
 
     st.caption("LLM")
-    model_side_name = f"{st.session_state.model} (max_tokens={st.session_state.max_tokens})"
-    with st.expander(model_side_name, expanded=True):
-        st.selectbox("Provider", ["claude", "openai"], key="provider")
+    if st.session_state.model not in MODELS[st.session_state.provider]:
+        reset_model()
+    with st.expander(f"{st.session_state.model} (max_tokens={st.session_state.max_tokens})", expanded=True):
+        st.selectbox("Provider", PROVIDERS, key="provider", on_change=reset_model)
+        st.selectbox("Model", MODELS[st.session_state.provider], key="model")
+        st.number_input("Max tokens", min_value=500, step=500, key="max_tokens")
 
-        if st.session_state.provider == "claude":
-            st.selectbox("Model", model_options_claude, key="model")
-            st.number_input("Max Tokens", min_value=500, step=500, key="max_tokens")
-            st.text_input(
-                "Anthropic API key",
-                type="password",
-                key="_tmp_anthropic_api_key",
-                value=st.session_state.anthropic_api_key,
-                on_change=lambda: setattr(
-                    st.session_state, 
-                    "anthropic_api_key", 
-                    st.session_state._tmp_anthropic_api_key
-                )
-            )
-        elif st.session_state.provider == "openai":
-            st.selectbox("Model", model_options_openai, key="model")
-            st.number_input("Max Tokens", min_value=500, step=500, key="max_tokens")
-            st.text_input(
-                "OpenAI API key",
-                type="password",
-                key="_tmp_openai_api_key",
-                value=st.session_state.openai_api_key,
-                on_change=lambda: setattr(
-                    st.session_state, 
-                    "openai_api_key", 
-                    st.session_state._tmp_openai_api_key
-                )
-            )
+    # Always rendered (never inside a condition) so Streamlit keeps the keys in session state
+    st.caption("API keys")
+    with st.expander("API keys", expanded=not has_api_key):
+        st.text_input("Anthropic API key", type="password", key="anthropic_api_key")
+        st.text_input("OpenAI API key", type="password", key="openai_api_key")
+        st.text_input("Hugging Face token", type="password", key="hf_token", help="Only needed for gated or private embedding models.")
 
     st.caption("Evaluation")
     with st.expander("Evaluation", expanded=False):
         st.checkbox("Run RAGAS", disabled=True)
+
+settings = {key: st.session_state[key] for key in DEFAULTS}
+
+# Indexing runs after the whole sidebar is drawn: st.rerun() discards the state
+# of every widget that was not rendered yet in the current run.
+if index_clicked and uploaded:
+    index_document(uploaded, settings)
 
 # MAIN AREA --------------------------------------------------------------------
 col_chat, col_debug = st.columns([3, 2])
@@ -316,78 +234,44 @@ with col_chat:
     st.header("Chat")
     chat_container = st.container(height=600)
 
-    # render messages
+    if not index:
+        question = st.chat_input("Upload and index a PDF first...", disabled=True)
+    else:
+        question = st.chat_input("Ask anything about your document...")
+
+    if question:
+        st.session_state.messages.append({"role": "user", "content": question})
+        try:
+            with st.spinner("Retrieving and generating..." if llm_on else "Retrieving..."):
+                llm = LLM(settings["provider"], settings["model"], api_key) if llm_on else None
+                result = pipeline.answer_question(question, index, settings, llm)
+        except Exception as e:
+            st.session_state.messages.append({"role": "assistant", "error": f"{type(e).__name__}: {e}"})
+        else:
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": result["answer"],
+                "chunks": result["chunks"],
+            })
+            st.session_state.last_debug = result["debug"]
+
     with chat_container:
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
-                if msg["role"] == "assistant":
-                    for i, chunk in enumerate(msg.get("chunks", []), 1):
-                        score = chunk.get("score", 0)
-                        score_color = "🟢" if score >= 0.7 else "🟡" if score >= 0.4 else "🔴"
-                        
-                        with st.expander(f"{score_color} Score: {score:.2f} | 📍 Page: {chunk['page']}"):
+                if msg["role"] == "user":
+                    st.markdown(msg["content"])
+                elif msg.get("error"):
+                    st.error(msg["error"])
+                else:
+                    for chunk in msg["chunks"]:
+                        with st.expander(f"{score_badge(chunk)} | 📍 Page {chunk['page']}"):
                             st.text(chunk["text"])
-                    if msg.get("generation_enabled") and msg.get("content"):
+                    if not msg["chunks"]:
+                        st.warning("No chunks matched this question.")
+                    if msg["content"]:
                         st.markdown(msg["content"])
                     else:
-                        st.info("Generation disabled or no api key, showing retrieved chunks only.")
-                else:
-                    st.markdown(msg["content"])
-
-    # input
-    if not st.session_state.collection:
-        st.chat_input("Upload and index a PDF first...", disabled=True)
-    else:
-        if question := st.chat_input("Ask anything about your document..."):
-            st.session_state.messages.append({"role": "user", "content": question})
-            with st.spinner("Retrieving and generating..."):
-                # query handling
-                llm = LLM(st.session_state.provider, st.session_state.model, api_key) if has_api_key else None
-
-                query_result = handle_query(question, st.session_state.query_strategy, llm)
-                
-                # retrieve for each query, merge results
-                results_per_query = []
-                query_chunk_map = {}  # sub_question → [chunk_ids]
-
-                for q in query_result["queries"]:
-                    found = retrieve(q, st.session_state.collection,
-                                    st.session_state.retrieval_n_chunks,
-                                    st.session_state.indexer,
-                                    st.session_state.retrieval_model)
-                    results_per_query.append(found)
-                    query_chunk_map[q] = [chunk["chunk_id"] for chunk in found]
-                chunks_found = merge_results(results_per_query, st.session_state.retrieval_n_chunks)
-            if st.session_state.enable_generation and has_api_key:
-                with st.spinner("Generating..."):
-                    answer = generate(question, chunks_found, llm, st.session_state.max_tokens)
-            else:
-                answer = None
-            pages_used = sorted(set(c["page"] for c in chunks_found))
-            st.caption(f"Sources: pages {pages_used}")
-
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": answer,
-                "chunks": chunks_found,
-                "generation_enabled": st.session_state.enable_generation and has_api_key,
-            })
-
-            # store debug info
-            st.session_state.last_debug = {
-                "question": question,
-                "query_used": query_result["queries"][0],
-                "query_strategy": query_result["strategy"],
-                "query_display": query_result["display"],
-                "chunks": chunks_found,
-                "query_chunk_map": query_chunk_map,
-                "llm_usage": llm.usage if llm else [],
-            }
-
-            for key in list(st.session_state.keys()):
-                if key.startswith("chunk_display_") or key.startswith("child_") or key.startswith("parent_"):
-                    del st.session_state[key]
-            st.rerun()
+                        st.info("LLM disabled or no API key, showing retrieved chunks only.")
 
 # DEBUG PANE ---------------------------------------------------------------
 with col_debug:
@@ -397,38 +281,35 @@ with col_debug:
         st.info("Ask a question to see debug info here.")
     else:
         debug = st.session_state.last_debug
+        display = debug["query_display"]
 
         # costs
-        if st.session_state.retrieval_model == "OpenAI Embedding":
-            if hasattr(st.session_state.indexer, "tokens_used"):
-                with st.expander("💵 Embedding tokens used", expanded=True):
-                    st.markdown(f"total: :green[{sum(st.session_state.indexer.tokens_used.values())}]")
-                    for event, tokens_used in st.session_state.indexer.tokens_used.items():
-                        st.markdown(f"{event}: :green[{tokens_used:,}]")
-
-        if debug.get("llm_usage"):
-            with st.expander("💵 LLM tokens used", expanded=True):
+        if debug["llm_usage"]:
+            with st.expander("💵 LLM tokens used (this question)", expanded=True):
                 total_in = sum(u["input_tokens"] for u in debug["llm_usage"])
                 total_out = sum(u["output_tokens"] for u in debug["llm_usage"])
                 st.markdown(f"total: :green[{total_in:,}] in / :green[{total_out:,}] out")
                 for u in debug["llm_usage"]:
                     st.markdown(f"{u['label']}: :green[{u['input_tokens']:,}] in / :green[{u['output_tokens']:,}] out")
 
+        embedding_usage = index["dense"]["indexer"].usage if index and index["dense"] else []
+        if embedding_usage:
+            with st.expander("💵 Embedding tokens used (this document)", expanded=False):
+                st.markdown(f"total: :green[{sum(u['tokens'] for u in embedding_usage):,}]")
+                for u in embedding_usage:
+                    st.markdown(f"{u['label']}: :green[{u['tokens']:,}]")
+
         # query trace
         with st.expander("💬 Query trace", expanded=False):
             st.markdown(f"**Strategy:** `{debug['query_strategy']}`")
             st.markdown(f"**Original:** {debug['question']}")
-            
-            display = debug.get("query_display", {})
-            
+
             if display.get("rewritten"):
                 st.markdown("**Rewritten to:**")
                 st.info(display["rewritten"])
-            
             if display.get("hypothetical_document"):
                 st.markdown("**HyDE — fake answer used for search:**")
                 st.info(display["hypothetical_document"])
-            
             if display.get("sub_questions"):
                 st.markdown("**Decomposed into:**")
                 for i, q in enumerate(display["sub_questions"], 1):
@@ -436,45 +317,25 @@ with col_debug:
 
         with st.expander(f"🔎 Retrieved chunks ({len(debug['chunks'])})", expanded=False):
             for i, chunk in enumerate(debug["chunks"], 1):
-                score = chunk.get("score", 0)
-                if score >= 0.7:
-                    score_color = "🟢"
-                elif score >= 0.4:
-                    score_color = "🟡"
-                else:
-                    score_color = "🔴"
+                st.markdown(f"**Chunk {i}** — Page {chunk['page']} — {score_badge(chunk)}")
 
-                st.markdown(
-                    f"**Chunk {i}** — Page {chunk['page']} "
-                    f"{score_color} score `{score}`"
-                )
-
-                if debug.get("query_chunk_map"):
-                    matched_qs = [q for q, ids in debug["query_chunk_map"].items() 
-                                if chunk["chunk_id"] in ids]
-                    if matched_qs:
-                        for q in matched_qs:
+                if display.get("sub_questions"):
+                    for q, ids in debug["query_chunk_map"].items():
+                        if chunk["chunk_id"] in ids:
                             st.caption(f"↳ from: {q}")
 
                 if chunk.get("parent_text"):
                     tab_child, tab_parent = st.tabs(["Matched (child)", "Sent to LLM (parent)"])
-                    with tab_child:
-                        st.text_area("Matched (child)", chunk["text"], height=100, disabled=True, key=f"child_{i}", label_visibility="collapsed")
-                    with tab_parent:
-                        st.text_area("Sent to LLM (parent)", chunk["parent_text"], height=100, disabled=True, key=f"parent_{i}", label_visibility="collapsed")
+                    with tab_child.container(height=120):
+                        st.text(chunk["text"])
+                    with tab_parent.container(height=120):
+                        st.text(chunk["parent_text"])
                 else:
-                    st.text_area("Chunk", chunk["text"], height=100, disabled=True, label_visibility="collapsed")
+                    with st.container(height=120):
+                        st.text(chunk["text"])
 
         # process log
         with st.expander("🛠️ Process log", expanded=False):
-            st.markdown("**Steps run:**")
-            st.markdown("1. ✅ Query received")
-            st.markdown("2. ✅ Query strategy: none (passthrough)")
-            st.markdown("3. ✅ Dense retrieval")
-            st.markdown("4. ⬜ Reranker (disabled)")
-            st.markdown("5. ⬜ Corrective RAG (disabled)")
-            st.markdown("6. ⬜ Contextual compression (disabled)")
-            st.markdown("7. ✅ Generation")
-            st.markdown("8. ⬜ RAGAS evaluation (disabled)")
-# debug state if needed
-st.write({k: v for k, v in dict(st.session_state).items() if k not in ('anthropic_api_key','openai_api_key','_tmp_anthropic_api_key','_tmp_openai_api_key')})
+            for i, s in enumerate(debug["steps"], 1):
+                detail = f" — {s['detail']}" if s["detail"] else ""
+                st.markdown(f"{i}. {'✅' if s['ran'] else '⬜'} {s['name']}{detail}")
