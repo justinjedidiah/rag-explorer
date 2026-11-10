@@ -1,0 +1,57 @@
+Revised 2026-11-10. Original notes from March 2026 kept where still open.
+
+BELUM (open)
+============
+
+Eval
+- RAGAS (checkbox di sidebar masih disabled)
+
+Embeddings / retrieval
+- sparse: SPLADE (baru BM25)
+- late interaction: ColBERT
+- multilingual -> multilingual-e5-large
+- code -> code-search-net or voyage-code-2
+- chunks tidak pernah nyebrang halaman (chunking per page), mungkin perlu digabung dulu
+
+Lainnya
+- add caching? (embeddings + LLM calls; sekarang cuma model list yg di-cache 1 jam)
+- llama apa kabar -> ollama sudah dihapus, local LLM belum diputuskan
+- OCR untuk scanned PDF (sekarang cuma kasih error "No text could be extracted")
+- streaming jawaban
+- chat history tidak dikirim ke LLM, tiap pertanyaan berdiri sendiri
+- screenshot di README masih sidebar lama
+- OpenAI chat models difilter pakai nama (generation/models.py), cek lagi kalau ada model aneh di dropdown
+- belum pernah dites pakai API key asli setelah refactor: Claude 5.5 ids, OpenAI max_completion_tokens, OpenAI embeddings
+
+
+SUDAH (done, branch revive-fixes-and-features)
+==============================================
+
+Dari notes lama
+- hf token -> input di sidebar (API keys) + HF_TOKEN di .env
+- tokens used untuk generation -> per step di debug panel (query strategy, corrective, compression, generation, indexing)
+- BAAI agak gede -> tambah BAAI/bge-small-en-v1.5 sebagai opsi ringan
+- Retrieval: dense, sparse, hybrid (weighted dense + sparse), reranking (top 20 murah -> cross-encoder -> top n)
+- Query handling: rewrite, HyDE, decomposition
+- Corrective RAG
+- Chunk positioning (best first and last, worst in middle)
+- IDE BAGUS (fake questions): "Index hypothetical questions"
+    chunk -> fake questions -> embed -> hit balik ke chunk
+    HyDE otomatis dimatiin kalau ini aktif, decompose masih bisa
+    c->fake q | q tetap   (ini)
+    c tetap   | q->fake c (HyDE)
+
+Tambahan
+- contextual compression
+- model list live dari provider (Claude + OpenAI, chat + embedding)
+- pipeline.py terpisah dari app.py, bisa dipakai tanpa Streamlit
+- sidebar kasih warning kalau settings berubah dan perlu re-index
+- tests (pytest, 110 tests, tanpa API call)
+
+Bug yang dibetulkan
+- decompose cuma pakai sub-question pertama
+- ganti retrieval model setelah indexing bikin crash
+- overlap >= chunk size bikin hang
+- PDF besar gagal di OpenAI embeddings / Chroma (sekarang di-batch)
+- BM25 stemming diam-diam tidak jalan untuk kode bahasa seperti "en"
+- process log palsu, session state ke-dump di halaman, API key hilang waktu ganti provider
