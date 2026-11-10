@@ -1,9 +1,13 @@
 import re
 import time
 import chromadb
-from config import CHROMA_PATH
 
-client = chromadb.PersistentClient(path=CHROMA_PATH)
+# In memory on purpose. An index only lives as long as its browser session, so
+# nothing needs to survive a restart, and PersistentClient loses small
+# collections: below its sync threshold their HNSW index exists only in a cache,
+# and once about nine collections exist the oldest are evicted and every query
+# on them fails with "Error creating hnsw segment reader: Nothing found on disk".
+client = chromadb.EphemeralClient()
 
 
 def chunk_metadata(chunk: dict) -> dict:
@@ -26,6 +30,7 @@ def get_session_collection_name(session_id: str) -> str:
 
 def build_index(chunks: list[dict], vectors: list[list[float]], session_id: str):
     """Make Chroma collection, delete old collection if already exist"""
+    cleanup_old_collections()
     name = get_session_collection_name(session_id)
     existing = [c.name for c in client.list_collections()]
     if name in existing:
@@ -52,7 +57,9 @@ def build_index(chunks: list[dict], vectors: list[list[float]], session_id: str)
 
 
 def cleanup_old_collections(max_age_hours: int = 24):
-    """Delete collections left behind by sessions older than max_age_hours."""
+    """Free the collections of sessions that are long gone. A session's
+    collection cannot be reached once the session ends, so without this a
+    long-running server would keep every document ever indexed in memory."""
     now = time.time()
     for col in client.list_collections():
         created_at = (col.metadata or {}).get("created_at", 0)
@@ -61,8 +68,3 @@ def cleanup_old_collections(max_age_hours: int = 24):
                 client.delete_collection(col.name)
             except Exception:
                 pass
-
-
-# A session's collection is only reachable while that session lives, so sweep
-# leftovers once per server start instead of on every Streamlit rerun.
-cleanup_old_collections()

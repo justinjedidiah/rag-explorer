@@ -5,13 +5,11 @@ The first run downloads all-MiniLM-L6-v2 and the reranker from Hugging Face.
 """
 import json
 import os
-import tempfile
 
 # Before any project import: ignore the keys in .env (load_dotenv does not
-# override variables that are already set) and keep Chroma out of .chroma_db.
+# override variables that are already set).
 os.environ["ANTHROPIC_API_KEY"] = ""
 os.environ["OPENAI_API_KEY"] = ""
-os.environ["CHROMA_PATH"] = tempfile.mkdtemp(prefix="rag-explorer-tests-")
 
 import fitz
 import pytest

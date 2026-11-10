@@ -181,6 +181,18 @@ def test_everything_switched_on_together(ask):
     assert {u["label"] for u in llm.usage} == {"Query decomposition", "Corrective RAG", "Contextual compression", "Generation"}
 
 
+def test_an_index_survives_many_newer_ones(pages):
+    # Chroma's PersistentClient lost small collections once about nine existed
+    def build_for(session):
+        return pipeline.build_index(pages, pipeline.index_config(DEFAULT_SETTINGS), f"test-many-{session}", log=lambda m: None)
+
+    first = build_for(0)
+    for session in range(1, 15):
+        build_for(session)
+    result = pipeline.answer_question("event horizon", first, DEFAULT_SETTINGS, None)
+    assert result["chunks"][0]["page"] == 3
+
+
 # index config -------------------------------------------------------------
 def test_query_time_settings_do_not_change_the_index_config():
     base = pipeline.index_config(DEFAULT_SETTINGS)

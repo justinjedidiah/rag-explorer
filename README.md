@@ -151,7 +151,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The tests never call a paid API: the LLM is replaced by a fake and only local models are used. They ignore the keys in your `.env` and use a temporary Chroma folder. The first run downloads all-MiniLM-L6-v2 and the reranker from Hugging Face.
+The tests never call a paid API: the LLM is replaced by a fake and only local models are used. They ignore the keys in your `.env`. The first run downloads all-MiniLM-L6-v2 and the reranker from Hugging Face.
 
 | File | Covers |
 |---|---|
