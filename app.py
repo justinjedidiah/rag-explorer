@@ -18,7 +18,7 @@ st.set_page_config(
 
 # OPTIONS AND DEFAULTS ------------------------------------------------------
 CHUNK_STRATEGIES = ["Fixed size", "Semantic", "Hierarchical"]
-RETRIEVAL_MODES = ["Dense", "Sparse"]
+RETRIEVAL_MODES = ["Dense", "Sparse", "Hybrid"]
 DENSE_MODELS = ["all-MiniLM-L6-v2", "BAAI/bge-small-en-v1.5", "BAAI/bge-large-en-v1.5", OPENAI_EMBEDDING]
 OPENAI_EMBEDDING_MODELS = ["text-embedding-3-small", "text-embedding-3-large"]
 STOPWORD_MODES = ["None", "Language default", "Custom"]
@@ -43,6 +43,7 @@ DEFAULTS = {
     "bm25_stemming": False,
     "bm25_stopwords_mode": STOPWORD_MODES[0],
     "bm25_stopwords_custom": "",
+    "hybrid_dense_weight": 0.5,
     "retrieval_n_chunks": 5,
     "query_strategy": QUERY_STRATEGIES[0],
     "provider": PROVIDERS[0],
@@ -182,6 +183,12 @@ with st.sidebar:
             if st.session_state.bm25_stopwords_mode == "Custom":
                 st.text_input("Custom stopwords (comma separated)", key="bm25_stopwords_custom")
 
+        if st.session_state.retrieval_mode == "Hybrid":
+            st.slider(
+                "Dense weight", min_value=0.0, max_value=1.0, step=0.05, key="hybrid_dense_weight",
+                help="1.0 = only the embedding score counts, 0.0 = only BM25. Applies to the next question, no re-index needed.",
+            )
+
         st.number_input("Chunks to retrieve", min_value=1, key="retrieval_n_chunks")
 
     st.caption("Query strategy")
@@ -318,6 +325,10 @@ with col_debug:
         with st.expander(f"🔎 Retrieved chunks ({len(debug['chunks'])})", expanded=False):
             for i, chunk in enumerate(debug["chunks"], 1):
                 st.markdown(f"**Chunk {i}** — Page {chunk['page']} — {score_badge(chunk)}")
+                if chunk.get("score_type") == "hybrid":
+                    dense_score = "not in dense results" if chunk["dense_score"] is None else f"cosine {chunk['dense_score']:.2f}"
+                    sparse_score = "not in BM25 results" if chunk["sparse_score"] is None else f"bm25 {chunk['sparse_score']:.2f}"
+                    st.caption(f"↳ {dense_score} · {sparse_score}")
 
                 if display.get("sub_questions"):
                     for q, ids in debug["query_chunk_map"].items():

@@ -2,7 +2,8 @@
 
 Every function returns chunks as dicts:
   {"chunk_id", "text", "page", "score", "score_type", "parent_text", "parent_id"}
-score_type says what the number means: "cosine" (0-1 similarity) or "bm25" (unbounded).
+score_type says what the number means: "cosine" (0-1 similarity), "bm25" (unbounded)
+or "hybrid" (weighted mix of both, 0-1 but relative to the other candidates).
 """
 
 
@@ -46,7 +47,35 @@ def search_sparse(sparse: dict, query: str, k: int) -> list[dict]:
     ]
 
 
-def search(index: dict, query: str, k: int) -> list[dict]:
+def search_hybrid(index: dict, query: str, k: int, dense_weight: float) -> list[dict]:
+    """Weighted sum of dense and sparse scores.
+
+    Cosine and BM25 scores are on different scales, so each result list is
+    min-max normalised to 0-1 first. A chunk missing from one list scores 0 there.
+    """
+    pool = max(k * 4, 20)  # look deeper than k so chunks ranked low by one side can still win
+    fused = {}
+    for found, weight, key in (
+        (search_dense(index["dense"], query, pool), dense_weight, "dense_score"),
+        (search_sparse(index["sparse"], query, pool), 1 - dense_weight, "sparse_score"),
+    ):
+        if not found:
+            continue
+        high, low = found[0]["score"], found[-1]["score"]
+        for chunk in found:
+            normalised = (chunk["score"] - low) / (high - low) if high > low else 1.0
+            entry = fused.setdefault(
+                chunk["chunk_id"],
+                {**chunk, "score": 0.0, "score_type": "hybrid", "dense_score": None, "sparse_score": None},
+            )
+            entry[key] = chunk["score"]
+            entry["score"] = round(entry["score"] + weight * normalised, 4)
+    return sorted(fused.values(), key=lambda c: c["score"], reverse=True)[:k]
+
+
+def search(index: dict, query: str, k: int, dense_weight: float = 0.5) -> list[dict]:
+    if index["dense"] and index["sparse"]:
+        return search_hybrid(index, query, k, dense_weight)
     if index["dense"]:
         return search_dense(index["dense"], query, k)
     return search_sparse(index["sparse"], query, k)

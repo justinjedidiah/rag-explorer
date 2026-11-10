@@ -11,8 +11,8 @@ from query.handler import handle_query, NO_STRATEGY
 from generation.generator import LLM, generate
 
 # Which retrieval modes need which kind of index
-DENSE_MODES = ("Dense",)
-SPARSE_MODES = ("Sparse",)
+DENSE_MODES = ("Dense", "Hybrid")
+SPARSE_MODES = ("Sparse", "Hybrid")
 
 
 def index_config(settings: dict) -> dict:
@@ -105,7 +105,7 @@ def answer_question(question: str, index: dict, settings: dict, llm: LLM | None)
     step("Query strategy", strategy != NO_STRATEGY, strategy if strategy != NO_STRATEGY else "raw question")
 
     n_chunks = settings["retrieval_n_chunks"]
-    results_per_query = [search(index, q, n_chunks) for q in queries]
+    results_per_query = [search(index, q, n_chunks, settings["hybrid_dense_weight"]) for q in queries]
     query_chunk_map = {q: [c["chunk_id"] for c in found] for q, found in zip(queries, results_per_query)}
     chunks = merge_results(results_per_query, n_chunks)
     step(
