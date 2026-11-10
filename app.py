@@ -23,6 +23,7 @@ RETRIEVAL_MODES = ["Dense", "Sparse", "Hybrid"]
 DENSE_MODELS = ["all-MiniLM-L6-v2", "BAAI/bge-small-en-v1.5", "BAAI/bge-large-en-v1.5", OPENAI_EMBEDDING]
 STOPWORD_MODES = ["None", "Language default", "Custom"]
 QUERY_STRATEGIES = [NO_STRATEGY, "Rewrite", "HyDE", "Decompose"]
+SAME_MODEL = "Same as answer model"
 PROVIDERS = ["openai", "claude"]
 
 # Every setting lives in st.session_state under these keys; the widgets bind to them.
@@ -49,6 +50,7 @@ DEFAULTS = {
     "corrective_rag": False,
     "contextual_compression": False,
     "chunk_positioning": False,
+    "post_retrieval_model": SAME_MODEL,
     "provider": PROVIDERS[0],
     "model": model_catalog.FALLBACK_CHAT_MODELS[PROVIDERS[0]][0],
     "max_tokens": 4000,
@@ -121,10 +123,13 @@ def select_model(label: str, key: str, options: list[str], fallback: list[str], 
 
 
 def usage_summary(usage: list[dict]) -> list[str]:
-    """LLM token usage as markdown lines: a total, then one line per kind of call."""
+    """LLM token usage as markdown lines: a total, then one line per kind of call
+    (and per model, when more than one model was used)."""
+    several_models = len({u.get("model") for u in usage}) > 1
     by_label = {}
     for u in usage:
-        entry = by_label.setdefault(u["label"], {"calls": 0, "in": 0, "out": 0})
+        label = f"{u['label']} · {u['model']}" if several_models else u["label"]
+        entry = by_label.setdefault(label, {"calls": 0, "in": 0, "out": 0})
         entry["calls"] += 1
         entry["in"] += u["input_tokens"]
         entry["out"] += u["output_tokens"]
@@ -275,7 +280,14 @@ with st.sidebar:
             help=None if llm_on else "Rewrite, HyDE and Decompose need the LLM enabled.",
         )
 
+    fallback_models = model_catalog.FALLBACK_CHAT_MODELS[st.session_state.provider]
+    chat_models, models_note = live_or_fallback(
+        lambda key: _fetch_chat_models(st.session_state.provider, key), api_key, fallback_models,
+    )
+
     st.caption("Post retrieval")
+    if st.session_state.post_retrieval_model not in chat_models:  # provider or list changed
+        st.session_state.post_retrieval_model = SAME_MODEL
     if not llm_on:
         st.session_state.corrective_rag = False
         st.session_state.contextual_compression = False
@@ -296,12 +308,13 @@ with st.sidebar:
             "Chunk positioning", key="chunk_positioning",
             help="Order the chunks so the best ones are first and last in the prompt and the weakest sit in the middle.",
         )
+        st.selectbox(
+            "Model for corrective RAG and compression", [SAME_MODEL] + chat_models, key="post_retrieval_model",
+            disabled=not llm_on,
+            help="These steps make many small judgement calls, so a cheaper model than the one writing the answer is often enough.",
+        )
 
     st.caption("LLM")
-    fallback_models = model_catalog.FALLBACK_CHAT_MODELS[st.session_state.provider]
-    chat_models, models_note = live_or_fallback(
-        lambda key: _fetch_chat_models(st.session_state.provider, key), api_key, fallback_models,
-    )
     if st.session_state.model not in chat_models:  # provider or list changed
         st.session_state.model = model_catalog.default_model(chat_models, fallback_models)
     with st.expander(f"{st.session_state.model} (max_tokens={st.session_state.max_tokens})", expanded=True):
@@ -346,7 +359,10 @@ with col_chat:
         try:
             with st.spinner("Retrieving and generating..." if llm_on else "Retrieving..."):
                 llm = LLM(settings["provider"], settings["model"], api_key) if llm_on else None
-                result = pipeline.answer_question(question, index, settings, llm)
+                post_llm = None
+                if llm_on and settings["post_retrieval_model"] not in (SAME_MODEL, settings["model"]):
+                    post_llm = LLM(settings["provider"], settings["post_retrieval_model"], api_key)
+                result = pipeline.answer_question(question, index, settings, llm, post_llm)
         except Exception as e:
             st.session_state.messages.append({"role": "assistant", "error": f"{type(e).__name__}: {e}"})
         else:

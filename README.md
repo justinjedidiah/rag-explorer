@@ -104,6 +104,8 @@ Runs on the retrieved chunks before they go to the LLM.
 | Contextual compression | LLM cuts each chunk down to the sentences relevant to the question | Yes |
 | Chunk positioning | Puts the best chunks first and last in the prompt and the weakest in the middle | No |
 
+Corrective RAG and compression make many small judgement calls, so they can use a different (cheaper) model than the one that writes the answer. Pick it under "Model for corrective RAG and compression"; the debug panel then shows tokens per model.
+
 ---
 
 ### LLM

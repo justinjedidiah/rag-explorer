@@ -123,6 +123,27 @@ def test_rerank_and_post_retrieval_steps_from_the_sidebar(indexed):
     assert debug["dropped_chunks"] and debug["chunks"][0]["compressed_text"]
 
 
+def test_post_retrieval_model_can_differ_from_the_answer_model(indexed):
+    at = indexed(openai_api_key="fake", corrective_rag=True, contextual_compression=True)
+    assert at.selectbox(key="post_retrieval_model").options == ["Same as answer model"] + LIVE_CHAT_MODELS["openai"]
+
+    ask(at, "event horizon?")
+    assert {u["model"] for u in at.session_state["last_debug"]["llm_usage"]} == {"gpt-6-luna"}
+
+    at.selectbox(key="post_retrieval_model").set_value("gpt-4o")
+    rerun(at)
+    ask(at, "event horizon?")
+    models = {u["label"]: u["model"] for u in at.session_state["last_debug"]["llm_usage"]}
+    assert models == {"Corrective RAG": "gpt-4o", "Contextual compression": "gpt-4o", "Generation": "gpt-6-luna"}
+
+
+def test_post_retrieval_model_resets_when_the_provider_changes(indexed):
+    at = indexed(openai_api_key="fake", anthropic_api_key="fake", post_retrieval_model="gpt-4o")
+    at.selectbox(key="provider").set_value("claude")
+    rerun(at)
+    assert at.session_state["post_retrieval_model"] == "Same as answer model"
+
+
 def test_llm_failure_becomes_a_chat_message(indexed, monkeypatch):
     class BrokenLLM(FakeLLM):
         def complete(self, *args, **kwargs):

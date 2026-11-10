@@ -60,7 +60,7 @@ class FakeLLM:
         self.provider, self.model, self.usage = provider, model, []
 
     def complete(self, prompt, max_tokens=2000, label="LLM call"):
-        self.usage.append({"label": label, "input_tokens": len(prompt) // 4, "output_tokens": 10})
+        self.usage.append({"label": label, "model": self.model, "input_tokens": len(prompt) // 4, "output_tokens": 10})
         if label == "Query decomposition":
             return 'Sure: ["What is photosynthesis?", "When did the French Revolution begin?"]'
         if label == "Query rewrite":
@@ -119,11 +119,11 @@ def build(pages):
 
 @pytest.fixture(scope="session")
 def ask(build):
-    """ask(question, llm=None, **setting_overrides) -> result of answer_question."""
+    """ask(question, llm=None, post_llm=None, **setting_overrides) -> result of answer_question."""
 
-    def _ask(question, llm=None, **overrides):
+    def _ask(question, llm=None, post_llm=None, **overrides):
         index, settings = build(**overrides)
-        return pipeline.answer_question(question, index, settings, llm)
+        return pipeline.answer_question(question, index, settings, llm, post_llm)
 
     return _ask
 

@@ -137,6 +137,25 @@ def test_compression_adds_the_text_sent_to_the_llm(ask):
     assert all(c["compressed_text"] == "COMPRESSED" for c in result["chunks"])
 
 
+def test_post_retrieval_steps_can_use_their_own_model(ask):
+    llm, cheap = FakeLLM(model="answer-model"), FakeLLM(model="cheap-model")
+    result = ask("How do plants make oxygen?", llm=llm, post_llm=cheap, corrective_rag=True, contextual_compression=True, query_strategy="Rewrite")
+    assert {u["label"] for u in cheap.usage} == {"Corrective RAG", "Contextual compression"}
+    assert [u["label"] for u in llm.usage] == ["Query rewrite", "Generation"]
+    # the debug panel gets both, each tagged with its model
+    by_model = {(u["label"], u["model"]) for u in result["debug"]["llm_usage"]}
+    assert ("Corrective RAG", "cheap-model") in by_model and ("Generation", "answer-model") in by_model
+    details = {s["name"]: s["detail"] for s in result["debug"]["steps"]}
+    assert details["Corrective RAG"].startswith("cheap-model") and details["Generation"] == "answer-model"
+
+
+def test_post_retrieval_steps_default_to_the_answer_model(ask):
+    llm = FakeLLM(model="answer-model")
+    result = ask("How do plants make oxygen?", llm=llm, corrective_rag=True)
+    assert [u["label"] for u in llm.usage] == ["Corrective RAG", "Generation"]
+    assert len(result["debug"]["llm_usage"]) == 2  # not counted twice
+
+
 def test_positioning_reorders_without_losing_chunks(ask):
     plain = [c["chunk_id"] for c in ask("How do plants make oxygen?")["chunks"]]
     moved = [c["chunk_id"] for c in ask("How do plants make oxygen?", chunk_positioning=True)["chunks"]]

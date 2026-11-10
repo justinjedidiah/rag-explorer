@@ -46,7 +46,8 @@ Tambahan
 - model list live dari provider (Claude + OpenAI, chat + embedding)
 - pipeline.py terpisah dari app.py, bisa dipakai tanpa Streamlit
 - sidebar kasih warning kalau settings berubah dan perlu re-index
-- tests (pytest, 110 tests, tanpa API call)
+- tests (pytest, tanpa API call)
+- model terpisah (lebih murah) untuk corrective RAG + compression
 
 Bug yang dibetulkan
 - decompose cuma pakai sub-question pertama

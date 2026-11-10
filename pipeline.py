@@ -110,11 +110,15 @@ def build_index(
     return index
 
 
-def answer_question(question: str, index: dict, settings: dict, llm: LLM | None) -> dict:
+def answer_question(
+    question: str, index: dict, settings: dict, llm: LLM | None, post_llm: LLM | None = None,
+) -> dict:
     """Run one question through the pipeline.
 
     llm=None means no LLM calls at all: the raw question is used for retrieval
     and no answer is generated.
+    post_llm, when given, does the post-retrieval steps (corrective RAG and
+    compression) instead of llm, e.g. a cheaper model for those many small calls.
     Returns {"answer", "chunks", "debug"}; debug["steps"] lists what ran.
     """
     steps = []
@@ -149,17 +153,18 @@ def answer_question(question: str, index: dict, settings: dict, llm: LLM | None)
     else:
         step("Reranker", False, "disabled")
 
+    post_llm = (post_llm or llm) if llm else None
     dropped = []
     if settings["corrective_rag"] and llm:
-        chunks, dropped = corrective_filter(question, chunks, llm)
-        step("Corrective RAG", True, f"kept {len(chunks)}, dropped {len(dropped)} as irrelevant")
+        chunks, dropped = corrective_filter(question, chunks, post_llm)
+        step("Corrective RAG", True, f"{post_llm.model}: kept {len(chunks)}, dropped {len(dropped)} as irrelevant")
     else:
         step("Corrective RAG", False, "needs the LLM" if settings["corrective_rag"] else "disabled")
 
     if settings["contextual_compression"] and llm:
-        chunks = compress(question, chunks, llm)
+        chunks = compress(question, chunks, post_llm)
         n_compressed = sum(1 for c in chunks if c.get("compressed_text"))
-        step("Contextual compression", True, f"compressed {n_compressed} of {len(chunks)} chunks")
+        step("Contextual compression", True, f"{post_llm.model}: compressed {n_compressed} of {len(chunks)} chunks")
     else:
         step("Contextual compression", False, "needs the LLM" if settings["contextual_compression"] else "disabled")
 
@@ -185,6 +190,6 @@ def answer_question(question: str, index: dict, settings: dict, llm: LLM | None)
             "chunks": chunks,
             "dropped_chunks": dropped,
             "steps": steps,
-            "llm_usage": llm.usage if llm else [],
+            "llm_usage": (llm.usage + (post_llm.usage if post_llm is not llm else [])) if llm else [],
         },
     }

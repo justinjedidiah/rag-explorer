@@ -15,7 +15,7 @@ def parse_json_list(raw: str) -> list:
 class LLM:
     """One chat-completion interface over Claude and OpenAI that records token usage.
 
-    Every call appends {"label", "input_tokens", "output_tokens"} to self.usage,
+    Every call appends {"label", "model", "input_tokens", "output_tokens"} to self.usage,
     so the UI can show what each step of the pipeline cost.
     """
 
@@ -51,7 +51,7 @@ class LLM:
             text = response.choices[0].message.content or ""
             tokens_in, tokens_out = response.usage.prompt_tokens, response.usage.completion_tokens
 
-        self.usage.append({"label": label, "input_tokens": tokens_in, "output_tokens": tokens_out})
+        self.usage.append({"label": label, "model": self.model, "input_tokens": tokens_in, "output_tokens": tokens_out})
         return text
 
 
