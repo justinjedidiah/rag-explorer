@@ -116,6 +116,11 @@ with st.sidebar:
                 with st.spinner(f"Chunking ({len(pages)} pages)..."):
                     if st.session_state.chunk_strategy == "Hierarchical" and st.session_state.chunk_parent_size <= st.session_state.chunk_size:
                         st.error("Parent size must be larger than chunk size.")
+                        os.unlink(tmp_path)
+                        st.stop()
+                    if st.session_state.chunk_overlap >= st.session_state.chunk_size:
+                        st.error("Chunk overlap must be smaller than chunk size.")
+                        os.unlink(tmp_path)
                         st.stop()
                     chunks = chunk_documents(pages, st.session_state.chunk_strategy, size=st.session_state.chunk_size, overlap=st.session_state.chunk_overlap, parent_size=st.session_state.chunk_parent_size)
                 with st.spinner(f"Embedding ({len(chunks)} chunks)..."):

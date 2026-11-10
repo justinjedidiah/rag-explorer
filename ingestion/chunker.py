@@ -48,7 +48,7 @@ def chunk_hierarchical(pages: list[dict], size: int, overlap: int, parent_size: 
     )
     parent_splitter = RecursiveCharacterTextSplitter(
         chunk_size=parent_size,
-        chunk_overlap=overlap,
+        chunk_overlap=min(overlap, parent_size - 1),
         separators=["\n\n", "\n", ". ", " ", ""]
     )
     chunks = []
@@ -70,6 +70,11 @@ def chunk_hierarchical(pages: list[dict], size: int, overlap: int, parent_size: 
     return chunks
 
 def chunk_documents(pages, strategy, size, overlap, parent_size=None):
+    if overlap >= size:
+        # chunk_fixed would never advance, and the splitters reject it anyway
+        raise ValueError("Chunk overlap must be smaller than chunk size.")
+    if strategy == "Hierarchical" and (parent_size is None or parent_size <= size):
+        raise ValueError("Parent size must be larger than chunk size.")
     if strategy == "Fixed size":
         return chunk_fixed(pages, size, overlap)
     elif strategy == "Semantic":
