@@ -32,7 +32,7 @@ class LLM:
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
-    def complete(self, prompt: str, max_tokens: int = 512, label: str = "LLM call") -> str:
+    def complete(self, prompt: str, max_tokens: int = 2000, label: str = "LLM call") -> str:
         messages = [{"role": "user", "content": prompt}]
         if self.provider == "claude":
             response = self.client.messages.create(

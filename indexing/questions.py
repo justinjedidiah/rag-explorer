@@ -16,7 +16,7 @@ Return ONLY a JSON array of strings, nothing else.
 
 Text:
 {chunk["text"]}"""
-    raw = llm.complete(prompt, max_tokens=300, label="Hypothetical questions")
+    raw = llm.complete(prompt, label="Hypothetical questions")
     questions = [q.strip() for q in parse_json_list(raw) if isinstance(q, str) and q.strip()]
     return questions[:n_questions]
 

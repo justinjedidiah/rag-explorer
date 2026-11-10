@@ -20,7 +20,7 @@ Question: {question}
 {sources}
 
 Helpful sources:"""
-    raw = llm.complete(prompt, max_tokens=100, label="Corrective RAG")
+    raw = llm.complete(prompt, label="Corrective RAG")
     match = re.search(r"\[[\d,\s]*\]", raw)
     if not match:
         return chunks, []
@@ -47,7 +47,7 @@ Question: {question}
 
 Text:
 {chunk_text_for_llm(chunk)}"""
-        extract = llm.complete(prompt, max_tokens=1000, label="Contextual compression").strip()
+        extract = llm.complete(prompt, label="Contextual compression").strip()
         if extract and extract != "NONE":
             chunk = {**chunk, "compressed_text": extract}
         compressed.append(chunk)
