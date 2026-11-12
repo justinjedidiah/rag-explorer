@@ -99,7 +99,7 @@ def test_question_without_llm_shows_chunks_only(indexed):
     at = indexed()
     message = ask(at, "What is an event horizon?")
     assert message["chunks"][0]["page"] == 3 and message["content"] is None
-    assert any("showing retrieved chunks only" in i.value for i in at.info)
+    assert any("The LLM is off" in c.value for c in at.caption)
 
 
 @pytest.mark.parametrize("strategy", ["None (raw question)", "Rewrite", "HyDE", "Decompose"])
@@ -317,3 +317,33 @@ def test_reindex_applies_changed_settings_without_a_new_upload(build, pdf_bytes)
     assert at.session_state["index"]["config"]["chunk_size"] == 250
     assert "settings changed" not in warnings_of(at)
     assert ask(at, "event horizon?")["chunks"]
+
+
+# chat ---------------------------------------------------------------------
+def test_empty_chat_offers_suggestions_and_one_click_asks_it(indexed):
+    at = indexed()
+    assert not at.chat_message
+    suggestion = at.button_group[0].options[0]
+    at.button_group[0].set_value(suggestion)
+    rerun(at)
+    assert [m["role"] for m in at.session_state["messages"]] == ["user", "assistant"]
+    assert at.session_state["messages"][0]["content"] == suggestion
+    assert not at.button_group  # suggestions are gone once the conversation started
+
+
+def test_clear_chat_keeps_the_document(indexed):
+    at = indexed()
+    ask(at, "event horizon?")
+    next(b for b in at.button if b.label == "Clear chat").click()
+    rerun(at)
+    assert at.session_state["messages"] == [] and at.session_state["last_debug"] is None
+    assert at.session_state["index"] is not None
+    assert at.button_group and len(at.session_state["messages"]) == 0  # suggestions back, nothing re-asked
+
+
+def test_answer_is_shown_with_its_sources_folded(indexed):
+    at = indexed(openai_api_key="fake")
+    ask(at, "event horizon?")
+    reply = at.chat_message[1]
+    assert reply.markdown[0].value == "Fake answer [Source 1]"
+    assert " sources · page" in reply.expander[0].label and not reply.expander[0].proto.expanded

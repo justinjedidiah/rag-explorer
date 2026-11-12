@@ -25,6 +25,8 @@ STOPWORD_MODES = ["None", "Language default", "Custom"]
 QUERY_STRATEGIES = [NO_STRATEGY, "Rewrite", "HyDE", "Decompose"]
 SAME_MODEL = "Same as answer model"
 PROVIDERS = ["openai", "claude"]
+SUGGESTIONS = ["What is this document about?", "What are the main conclusions?", "Which numbers and dates matter most?"]
+CHAT_HEIGHT = 600
 
 # Every setting lives in st.session_state under these keys; the widgets bind to them.
 DEFAULTS = {
@@ -145,6 +147,47 @@ def remove_document():
     for key in ("index", "doc_name", "doc_bytes", "last_debug"):
         st.session_state[key] = None
     st.session_state.messages = []
+
+
+def clear_chat():
+    """Button callback: start the conversation over, keeping the indexed document."""
+    st.session_state.messages = []
+    st.session_state.last_debug = None
+
+
+def pick_suggestion():
+    """Pills callback: a clicked suggestion becomes the next question, and the pills reset."""
+    st.session_state.pending_question = st.session_state.suggestion
+    st.session_state.suggestion = None
+
+
+def render_sources(chunks: list[dict], expanded: bool):
+    """The retrieved chunks behind an answer, folded into one line."""
+    pages = sorted({chunk["page"] for chunk in chunks})
+    label = (
+        f"{len(chunks)} source{'s' if len(chunks) != 1 else ''} · "
+        f"page{'s' if len(pages) != 1 else ''} {', '.join(str(page) for page in pages)}"
+    )
+    with st.expander(label, expanded=expanded, icon=":material/format_quote:"):
+        for i, chunk in enumerate(chunks, 1):
+            st.markdown(f"**Source {i}** · page {chunk['page']} · {score_badge(chunk)}")
+            st.caption(chunk["text"])
+
+
+def render_message(msg: dict):
+    with st.chat_message(msg["role"]):
+        if msg["role"] == "user":
+            st.markdown(msg["content"])
+        elif msg.get("error"):
+            st.error(msg["error"], icon=":material/error:")
+        elif not msg["chunks"]:
+            st.warning("Nothing in the document matched this question.", icon=":material/search_off:")
+        elif msg["content"]:
+            st.markdown(msg["content"])
+            render_sources(msg["chunks"], expanded=False)
+        else:
+            st.caption("The LLM is off, so there is no written answer. These are the retrieved chunks.")
+            render_sources(msg["chunks"], expanded=True)
 
 
 def index_document(name: str, data: bytes, settings: dict, llm):
@@ -363,54 +406,59 @@ col_chat, col_debug = st.columns([3, 2])
 
 # CHAT -------------------------------------------------------------------------
 with col_chat:
-    st.header("Chat")
-    chat_container = st.container(height=600)
+    with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
+        st.subheader("Chat")
+        if st.session_state.messages:
+            st.button("Clear chat", type="tertiary", icon=":material/delete_sweep:", on_click=clear_chat)
 
-    if not index:
-        question = st.chat_input("Upload and index a PDF first...", disabled=True)
+    chat_slot = st.container()  # the conversation goes here, above the input
+    if index:
+        question = st.chat_input(f"Ask about {st.session_state.doc_name}", submit_mode="disable")
     else:
-        question = st.chat_input("Ask anything about your document...")
+        question = st.chat_input("Index a PDF to start asking", disabled=True)
+    question = question or st.session_state.pop("pending_question", None)  # a clicked suggestion
 
-    if question:
-        st.session_state.messages.append({"role": "user", "content": question})
-        try:
-            with st.spinner("Retrieving and generating..." if llm_on else "Retrieving..."):
-                llm = LLM(settings["provider"], settings["model"], api_key) if llm_on else None
-                post_llm = None
-                if llm_on and settings["post_retrieval_model"] not in (SAME_MODEL, settings["model"]):
-                    post_llm = LLM(settings["provider"], settings["post_retrieval_model"], api_key)
-                result = pipeline.answer_question(question, index, settings, llm, post_llm)
-        except Exception as e:
-            st.session_state.messages.append({"role": "assistant", "error": f"{type(e).__name__}: {e}"})
-        else:
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": result["answer"],
-                "chunks": result["chunks"],
-            })
-            st.session_state.last_debug = result["debug"]
+    is_empty = not st.session_state.messages and not question
+    with chat_slot:
+        chat_container = st.container(
+            height=CHAT_HEIGHT, border=False, autoscroll=True,
+            vertical_alignment="center" if is_empty else "top",
+            horizontal_alignment="center" if is_empty else "left",
+        )
 
     with chat_container:
+        if is_empty and index:
+            st.markdown("### :material/forum: Ask about your document", width="content")
+            st.caption(f"Answers come from {st.session_state.doc_name}, with the passages they are based on.", width="content")
+            st.pills("Suggested questions", SUGGESTIONS, key="suggestion", label_visibility="collapsed", on_change=pick_suggestion)
+        elif is_empty:
+            st.markdown("### :material/upload_file: No document yet", width="content")
+            st.caption("Upload a PDF in the sidebar and index it, then ask questions here.", width="content")
+
         for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]):
-                if msg["role"] == "user":
-                    st.markdown(msg["content"])
-                elif msg.get("error"):
-                    st.error(msg["error"])
-                else:
-                    for chunk in msg["chunks"]:
-                        with st.expander(f"{score_badge(chunk)} | 📍 Page {chunk['page']}"):
-                            st.text(chunk["text"])
-                    if not msg["chunks"]:
-                        st.warning("No chunks matched this question.")
-                    if msg["content"]:
-                        st.markdown(msg["content"])
-                    else:
-                        st.info("LLM disabled or no API key, showing retrieved chunks only.")
+            render_message(msg)
+
+        if question:
+            user_msg = {"role": "user", "content": question}
+            render_message(user_msg)
+            try:
+                with st.chat_message("assistant"), st.spinner("Searching the document and writing an answer..." if llm_on else "Searching the document..."):
+                    llm = LLM(settings["provider"], settings["model"], api_key) if llm_on else None
+                    post_llm = None
+                    if llm_on and settings["post_retrieval_model"] not in (SAME_MODEL, settings["model"]):
+                        post_llm = LLM(settings["provider"], settings["post_retrieval_model"], api_key)
+                    result = pipeline.answer_question(question, index, settings, llm, post_llm)
+            except Exception as e:
+                reply = {"role": "assistant", "error": f"{type(e).__name__}: {e}"}
+            else:
+                reply = {"role": "assistant", "content": result["answer"], "chunks": result["chunks"]}
+                st.session_state.last_debug = result["debug"]
+            st.session_state.messages += [user_msg, reply]
+            st.rerun()  # redraw from history: the spinner's bubble is replaced by the reply
 
 # DEBUG PANE ---------------------------------------------------------------
 with col_debug:
-    st.header("🔬 Debug Panel")
+    st.subheader("Debug panel")
 
     if st.session_state.last_debug is None:
         st.info("Ask a question to see debug info here.")
