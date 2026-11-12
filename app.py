@@ -124,11 +124,10 @@ def select_model(label: str, key: str, options: list[str], fallback: list[str], 
 
 def usage_summary(usage: list[dict]) -> list[str]:
     """LLM token usage as markdown lines: a total, then one line per kind of call
-    (and per model, when more than one model was used)."""
-    several_models = len({u.get("model") for u in usage}) > 1
+    and model."""
     by_label = {}
     for u in usage:
-        label = f"{u['label']} · {u['model']}" if several_models else u["label"]
+        label = f"{u['label']} · `{u['model']}`"
         entry = by_label.setdefault(label, {"calls": 0, "in": 0, "out": 0})
         entry["calls"] += 1
         entry["in"] += u["input_tokens"]
@@ -415,6 +414,8 @@ with col_debug:
         embedding_usage = index["dense"]["indexer"].usage if index and index["dense"] else []
         if embedding_usage:
             with st.expander("💵 Embedding tokens used (this document)", expanded=False):
+                embedding_model = index["config"].get("openai_embedding_model_name", index["config"]["dense_model"])
+                st.markdown(f"model: `{embedding_model}`")
                 st.markdown(f"total: :green[{sum(u['tokens'] for u in embedding_usage):,}]")
                 for u in embedding_usage:
                     st.markdown(f"{u['label']}: :green[{u['tokens']:,}]")
