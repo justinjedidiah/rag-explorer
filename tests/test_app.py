@@ -280,3 +280,40 @@ def test_indexing_problems_are_reported_not_raised(upload_and_index, pdf_bytes, 
     at = upload_and_index(pdf_bytes if data is None else data, **state)
     assert at.session_state["index"] is None
     assert any(message in e.value for e in at.error)
+
+
+# one document at a time ---------------------------------------------------
+def test_uploader_is_replaced_by_the_document_once_indexed(upload_and_index, pdf_bytes):
+    at = upload_and_index(pdf_bytes)
+    assert any("uploaded.pdf" in m.value for m in at.sidebar.markdown)
+    assert at.session_state["doc_bytes"] == pdf_bytes  # kept for re-indexing
+
+
+def test_indexed_document_only_offers_to_swap_it(build, pdf_bytes):
+    index, _ = build(chunk_strategy="Fixed size", chunk_size=500, chunk_overlap=30)
+    at = run_app(index=index, doc_name="test.pdf", doc_bytes=pdf_bytes)
+    assert [b.label for b in at.sidebar.button] == ["Use another document"]  # no upload, no re-index
+
+
+def test_use_another_document_clears_the_index_and_chat(indexed):
+    at = indexed()
+    ask(at, "event horizon?")
+    next(b for b in at.sidebar.button if b.label == "Use another document").click()
+    rerun(at)
+    assert at.session_state["index"] is None and at.session_state["doc_name"] is None
+    assert at.session_state["messages"] == [] and at.session_state["last_debug"] is None
+    assert at.chat_input[0].disabled
+    assert [b.label for b in at.sidebar.button] == ["Index document"]
+
+
+def test_reindex_applies_changed_settings_without_a_new_upload(build, pdf_bytes):
+    index, _ = build(chunk_strategy="Fixed size", chunk_size=500, chunk_overlap=30)
+    at = run_app(index=index, doc_name="test.pdf", doc_bytes=pdf_bytes)
+    at.number_input(key="chunk_size").set_value(250)
+    rerun(at)
+    reindex = next(b for b in at.sidebar.button if b.label == "Re-index")
+    reindex.click()
+    rerun(at)
+    assert at.session_state["index"]["config"]["chunk_size"] == 250
+    assert "settings changed" not in warnings_of(at)
+    assert ask(at, "event horizon?")["chunks"]

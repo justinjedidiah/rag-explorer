@@ -68,7 +68,7 @@ for key, val in DEFAULTS.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
-for key, val in {"index": None, "doc_name": None, "messages": [], "last_debug": None}.items():
+for key, val in {"index": None, "doc_name": None, "doc_bytes": None, "messages": [], "last_debug": None}.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
@@ -140,11 +140,18 @@ def usage_summary(usage: list[dict]) -> list[str]:
     return lines
 
 
-def index_document(uploaded, settings: dict, llm):
+def remove_document():
+    """Button callback: forget the document so another one can be uploaded."""
+    for key in ("index", "doc_name", "doc_bytes", "last_debug"):
+        st.session_state[key] = None
+    st.session_state.messages = []
+
+
+def index_document(name: str, data: bytes, settings: dict, llm):
     try:
-        with st.status(f"Indexing {uploaded.name}...", expanded=True) as status:
+        with st.status(f"Indexing {name}...", expanded=True) as status:
             status.write("Reading PDF...")
-            pages = load_pdf(uploaded.getvalue())
+            pages = load_pdf(data)
             config = pipeline.index_config(settings)
             progress_bar = st.progress(0.0) if config.get("question_index") else None
             index = pipeline.build_index(
@@ -162,7 +169,8 @@ def index_document(uploaded, settings: dict, llm):
         return
 
     st.session_state.index = index
-    st.session_state.doc_name = uploaded.name
+    st.session_state.doc_name = name
+    st.session_state.doc_bytes = data  # kept so the document can be re-indexed without uploading it again
     st.session_state.messages = []
     st.session_state.last_debug = None
     st.rerun()  # redraw the sidebar with the new index
@@ -188,25 +196,34 @@ with st.sidebar:
     )
     llm_on = st.session_state.enable_generation and has_api_key
 
+    # One document at a time: the uploader is only there until a document is indexed.
     st.caption("Document")
-    with st.expander(st.session_state.doc_name or "Upload document", expanded=True):
-        uploaded = st.file_uploader("Upload a PDF to start", type=["pdf"])
-
-        missing_openai_key = current_config.get("dense_model") == OPENAI_EMBEDDING and not st.session_state.openai_api_key
-        if missing_openai_key:
-            st.warning("OpenAI embeddings need an OpenAI API key (see API keys below).")
-        index_clicked = st.button(
-            "Index document", type="primary", width="stretch",
-            disabled=uploaded is None or missing_openai_key,
-        )
-
+    uploaded, index_clicked, reindex_clicked = None, False, False
+    missing_openai_key = current_config.get("dense_model") == OPENAI_EMBEDDING and not st.session_state.openai_api_key
+    with st.container(border=True):
         if index:
-            st.success(f"✓ {st.session_state.doc_name}")
-            st.caption(f"{index['chunk_count']} {index['config']['chunk_strategy']} chunks · {retrieval_label(index['config'])}")
+            st.markdown(f":material/description: **{st.session_state.doc_name}**")
+            details = f"{index['chunk_count']} {index['config']['chunk_strategy']} chunks · {retrieval_label(index['config'])}"
             if index["config"].get("question_index"):
-                st.caption(f"Indexed as {index['config']['questions_per_chunk']} hypothetical questions per chunk")
+                details += f" · {index['config']['questions_per_chunk']} hypothetical questions per chunk"
+            st.caption(details)
             if current_config != index["config"]:
                 st.warning("Chunking or retrieval settings changed since indexing. Index the document again to apply them.")
+                if missing_openai_key:
+                    st.warning("OpenAI embeddings need an OpenAI API key (see API keys below).")
+                reindex_clicked = st.button(
+                    "Re-index", type="primary", width="stretch", icon=":material/refresh:",
+                    disabled=missing_openai_key or st.session_state.doc_bytes is None,
+                )
+            st.button("Use another document", width="stretch", icon=":material/swap_horiz:", on_click=remove_document)
+        else:
+            uploaded = st.file_uploader("PDF document", type=["pdf"], label_visibility="collapsed")
+            if missing_openai_key:
+                st.warning("OpenAI embeddings need an OpenAI API key (see API keys below).")
+            index_clicked = st.button(
+                "Index document", type="primary", width="stretch",
+                disabled=uploaded is None or missing_openai_key,
+            )
 
     st.caption("Chunking")
     chunk_side_label = f"{st.session_state.chunk_strategy} chunking (size={st.session_state.chunk_size}"
@@ -337,8 +354,9 @@ settings = {key: st.session_state[key] for key in DEFAULTS}
 
 # Indexing runs after the whole sidebar is drawn: st.rerun() discards the state
 # of every widget that was not rendered yet in the current run.
-if index_clicked and uploaded:
-    index_document(uploaded, settings, LLM(settings["provider"], settings["model"], api_key) if settings["question_index"] else None)
+if (index_clicked and uploaded) or reindex_clicked:
+    doc_name, doc_bytes = (uploaded.name, uploaded.getvalue()) if uploaded else (st.session_state.doc_name, st.session_state.doc_bytes)
+    index_document(doc_name, doc_bytes, settings, LLM(settings["provider"], settings["model"], api_key) if settings["question_index"] else None)
 
 # MAIN AREA --------------------------------------------------------------------
 col_chat, col_debug = st.columns([3, 2])
