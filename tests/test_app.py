@@ -347,3 +347,38 @@ def test_answer_is_shown_with_its_sources_folded(indexed):
     reply = at.chat_message[1]
     assert reply.markdown[0].value == "Fake answer [Source 1]"
     assert " sources · page" in reply.expander[0].label and not reply.expander[0].proto.expanded
+
+
+# debug panel history ------------------------------------------------------
+def debug_panel_question(at: AppTest) -> str:
+    return next(c.value for c in at.caption if c.value.startswith(":material/chat_bubble:"))
+
+
+def test_debug_panel_can_go_back_to_an_earlier_question(indexed):
+    at = indexed()
+    ask(at, "event horizon?")
+    assert not [b for b in at.button if b.label == "Previous question"]  # nothing to switch between yet
+    ask(at, "sourdough starter?")
+    assert "sourdough starter?" in debug_panel_question(at)
+
+    at.button(key="debug_previous").click()
+    rerun(at)
+    assert "event horizon?" in debug_panel_question(at)
+    assert at.button(key="debug_previous").disabled and not at.button(key="debug_next").disabled
+
+    at.button(key="debug_latest").click()
+    rerun(at)
+    assert "sourdough starter?" in debug_panel_question(at)
+
+
+def test_an_answer_in_the_chat_can_be_sent_to_the_debug_panel(indexed):
+    at = indexed()
+    ask(at, "event horizon?")
+    ask(at, "sourdough starter?")
+    at.button(key="show_debug_1").click()  # the first answer; the latest one is already shown
+    rerun(at)
+    assert "event horizon?" in debug_panel_question(at)
+    assert [b.key for b in at.button if (b.key or "").startswith("show_debug_")] == ["show_debug_3"]
+
+    ask(at, "photosynthesis?")  # a new question brings the panel back to the latest
+    assert "photosynthesis?" in debug_panel_question(at)

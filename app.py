@@ -70,7 +70,8 @@ for key, val in DEFAULTS.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
-for key, val in {"index": None, "doc_name": None, "doc_bytes": None, "messages": [], "last_debug": None}.items():
+# debug_view is the position in messages of the answer shown in the debug panel; None follows the latest one
+for key, val in {"index": None, "doc_name": None, "doc_bytes": None, "messages": [], "last_debug": None, "debug_view": None}.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
@@ -144,7 +145,7 @@ def usage_summary(usage: list[dict]) -> list[str]:
 
 def remove_document():
     """Button callback: forget the document so another one can be uploaded."""
-    for key in ("index", "doc_name", "doc_bytes", "last_debug"):
+    for key in ("index", "doc_name", "doc_bytes", "last_debug", "debug_view"):
         st.session_state[key] = None
     st.session_state.messages = []
 
@@ -153,6 +154,12 @@ def clear_chat():
     """Button callback: start the conversation over, keeping the indexed document."""
     st.session_state.messages = []
     st.session_state.last_debug = None
+    st.session_state.debug_view = None
+
+
+def show_debug(position: int | None):
+    """Button callback: point the debug panel at one answer (None = the latest)."""
+    st.session_state.debug_view = position
 
 
 def pick_suggestion():
@@ -174,7 +181,8 @@ def render_sources(chunks: list[dict], expanded: bool):
             st.caption(chunk["text"])
 
 
-def render_message(msg: dict):
+def render_message(msg: dict, position: int | None = None, in_debug_panel: bool = False):
+    """position, when given, adds the button that sends this answer to the debug panel."""
     with st.chat_message(msg["role"]):
         if msg["role"] == "user":
             st.markdown(msg["content"])
@@ -188,6 +196,13 @@ def render_message(msg: dict):
         else:
             st.caption("The LLM is off, so there is no written answer. These are the retrieved chunks.")
             render_sources(msg["chunks"], expanded=True)
+        if position is not None and in_debug_panel:
+            st.caption(":material/visibility: Shown in the debug panel")
+        elif position is not None:
+            st.button(
+                "Show in debug panel", key=f"show_debug_{position}", type="tertiary",
+                icon=":material/bug_report:", on_click=show_debug, args=(position,),
+            )
 
 
 def index_document(name: str, data: bytes, settings: dict, llm):
@@ -216,6 +231,7 @@ def index_document(name: str, data: bytes, settings: dict, llm):
     st.session_state.doc_bytes = data  # kept so the document can be re-indexed without uploading it again
     st.session_state.messages = []
     st.session_state.last_debug = None
+    st.session_state.debug_view = None
     st.rerun()  # redraw the sidebar with the new index
 
 
@@ -419,6 +435,9 @@ with col_chat:
     question = question or st.session_state.pop("pending_question", None)  # a clicked suggestion
 
     is_empty = not st.session_state.messages and not question
+    # answers that have a debug trace (failed ones do not), and the one the debug panel shows
+    debug_positions = [i for i, msg in enumerate(st.session_state.messages) if msg.get("debug")]
+    debug_position = st.session_state.debug_view if st.session_state.debug_view in debug_positions else (debug_positions or [None])[-1]
     with chat_slot:
         chat_container = st.container(
             height=CHAT_HEIGHT, border=False, autoscroll=True,
@@ -435,8 +454,11 @@ with col_chat:
             st.markdown("### :material/upload_file: No document yet", width="content")
             st.caption("Upload a PDF in the sidebar and index it, then ask questions here.", width="content")
 
-        for msg in st.session_state.messages:
-            render_message(msg)
+        for position, msg in enumerate(st.session_state.messages):
+            if msg.get("debug") and len(debug_positions) > 1:  # with one answer there is nothing to switch between
+                render_message(msg, position, in_debug_panel=position == debug_position)
+            else:
+                render_message(msg)
 
         if question:
             user_msg = {"role": "user", "content": question}
@@ -451,8 +473,9 @@ with col_chat:
             except Exception as e:
                 reply = {"role": "assistant", "error": f"{type(e).__name__}: {e}"}
             else:
-                reply = {"role": "assistant", "content": result["answer"], "chunks": result["chunks"]}
+                reply = {"role": "assistant", "content": result["answer"], "chunks": result["chunks"], "debug": result["debug"]}
                 st.session_state.last_debug = result["debug"]
+            st.session_state.debug_view = None  # a new question brings the debug panel back to the latest
             st.session_state.messages += [user_msg, reply]
             st.rerun()  # redraw from history: the spinner's bubble is replaced by the reply
 
@@ -460,11 +483,28 @@ with col_chat:
 with col_debug:
     st.subheader("Debug panel")
 
-    if st.session_state.last_debug is None:
+    if debug_position is None:
         st.info("Ask a question to see debug info here.")
     else:
-        debug = st.session_state.last_debug
+        debug = st.session_state.messages[debug_position]["debug"]
         display = debug["query_display"]
+
+        # which question this is, and stepping between questions
+        number, total = debug_positions.index(debug_position) + 1, len(debug_positions)
+        if total > 1:
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.button(
+                    "Previous question", key="debug_previous", icon=":material/chevron_left:", type="tertiary",
+                    disabled=number == 1, on_click=show_debug, args=(debug_positions[number - 2],),
+                )
+                st.markdown(f"**Question {number} of {total}**", width="content")
+                st.button(
+                    "Next question", key="debug_next", icon=":material/chevron_right:", icon_position="right", type="tertiary",
+                    disabled=number == total, on_click=show_debug, args=(debug_positions[min(number, total - 1)],),
+                )
+                if number != total:
+                    st.button("Latest", key="debug_latest", icon=":material/last_page:", type="tertiary", on_click=show_debug, args=(None,))
+        st.caption(f":material/chat_bubble: {debug['question']}")
 
         # costs
         if debug["llm_usage"]:
