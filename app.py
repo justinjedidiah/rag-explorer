@@ -166,14 +166,14 @@ def pick_suggestion():
     st.session_state.suggestion = None
 
 
-def render_sources(chunks: list[dict], expanded: bool):
+def render_sources(chunks: list[dict]):
     """The retrieved chunks behind an answer, folded into one line."""
     pages = sorted({page for chunk in chunks for page in range(chunk["page"], chunk.get("page_end", chunk["page"]) + 1)})
     label = (
         f"{len(chunks)} source{'s' if len(chunks) != 1 else ''} · "
         f"page{'s' if len(pages) != 1 else ''} {', '.join(str(page) for page in pages)}"
     )
-    with st.expander(label, expanded=expanded, icon=":material/format_quote:"):
+    with st.expander(label, icon=":material/format_quote:"):
         for i, chunk in enumerate(chunks, 1):
             st.markdown(f"**Source {i}** · {page_label(chunk)} · {score_badge(chunk)}")
             st.caption(chunk["text"])
@@ -190,10 +190,10 @@ def render_message(msg: dict, position: int | None = None, in_debug_panel: bool 
             st.warning("Nothing in the document matched this question.", icon=":material/search_off:")
         elif msg["content"]:
             st.markdown(msg["content"])
-            render_sources(msg["chunks"], expanded=False)
+            render_sources(msg["chunks"])
         else:
-            st.caption("The LLM is off, so there is no written answer. These are the retrieved chunks.")
-            render_sources(msg["chunks"], expanded=True)
+            st.caption("The LLM is off, so there is no written answer. Open the sources to read what was retrieved.")
+            render_sources(msg["chunks"])
         if position is not None and in_debug_panel:
             st.caption(":material/visibility: Shown in the debug panel")
         elif position is not None:
@@ -243,14 +243,7 @@ with st.sidebar:
     current_config = pipeline.index_config({key: st.session_state[key] for key in DEFAULTS})
     index = st.session_state.index
 
-    st.caption("Generation")
-    st.toggle(
-        "Enable LLM",
-        key="enable_generation",
-        disabled=not has_api_key,
-        help="Off (or no API key): no LLM calls are made, you only see the retrieved chunks.",
-    )
-    llm_on = st.session_state.enable_generation and has_api_key
+    llm_on = st.session_state.enable_generation and has_api_key  # the toggle itself is in the LLM section
 
     # One document at a time: the uploader is only there until a document is indexed.
     st.caption("Document")
@@ -264,7 +257,7 @@ with st.sidebar:
                 details += f" · {index['config']['questions_per_chunk']} hypothetical questions per chunk"
             st.caption(details)
             if current_config != index["config"]:
-                st.warning("Chunking or retrieval settings changed since indexing. Index the document again to apply them.")
+                st.warning("Index settings changed since indexing. Re-index to apply them.")
                 if missing_openai_key:
                     st.warning("OpenAI embeddings need an OpenAI API key (see API keys below).")
                 reindex_clicked = st.button(
@@ -281,23 +274,24 @@ with st.sidebar:
                 disabled=uploaded is None or missing_openai_key,
             )
 
-    st.caption("Chunking")
-    chunk_side_label = f"{st.session_state.chunk_strategy} chunking (size={st.session_state.chunk_size}"
-    if st.session_state.chunk_strategy == "Hierarchical":
-        chunk_side_label += f", parent_size={st.session_state.chunk_parent_size}"
-    chunk_side_label += f", overlap={st.session_state.chunk_overlap})"
-    with st.expander(chunk_side_label, expanded=True):
+    # Every section is a closed expander whose label says what is set, so the
+    # whole configuration can be read without opening anything. The keys keep an
+    # expander open while its label changes with the values inside it.
+    st.caption("Index settings", help="Baked into the index: after changing one, index the document again.")
+
+    chunk_summary = f"{st.session_state.chunk_strategy}, {st.session_state.chunk_size}"
+    with st.expander(f"Chunking · {chunk_summary}", key="section_chunking", icon=":material/content_cut:"):
         st.selectbox("Chunking strategy", CHUNK_STRATEGIES, key="chunk_strategy")
-        st.number_input("Chunk size", min_value=1, key="chunk_size")
-        st.number_input("Parent chunk size", min_value=2, key="chunk_parent_size", disabled=(st.session_state.chunk_strategy != "Hierarchical"))
+        st.number_input("Chunk size", min_value=1, key="chunk_size", help="In characters.")
+        if st.session_state.chunk_strategy == "Hierarchical":
+            st.number_input("Parent chunk size", min_value=2, key="chunk_parent_size")
         st.number_input("Chunk overlap", min_value=0, key="chunk_overlap")
         if st.session_state.chunk_overlap >= st.session_state.chunk_size:
             st.error("Chunk overlap must be smaller than chunk size.")
         if st.session_state.chunk_strategy == "Hierarchical" and st.session_state.chunk_parent_size <= st.session_state.chunk_size:
             st.error("Parent size must be larger than chunk size.")
 
-    st.caption("Embedding and retrieval")
-    with st.expander(f"{retrieval_label(current_config)} (n_chunks={st.session_state.retrieval_n_chunks})", expanded=True):
+    with st.expander(f"Search · {retrieval_label(current_config)}", key="section_search", icon=":material/database:"):
         st.selectbox("Retrieval mode", RETRIEVAL_MODES, key="retrieval_mode")
 
         if st.session_state.retrieval_mode in pipeline.DENSE_MODES:
@@ -323,41 +317,43 @@ with st.sidebar:
         if st.session_state.question_index:
             st.number_input("Questions per chunk", min_value=1, max_value=5, key="questions_per_chunk")
 
+    st.caption("Question settings", help="Apply to your next question, no re-index needed.")
+
+    results_summary = f"{st.session_state.retrieval_n_chunks} chunks" + (", reranked" if st.session_state.rerank else "")
+    with st.expander(f"Results · {results_summary}", key="section_results", icon=":material/format_list_numbered:"):
+        st.number_input("Chunks to retrieve", min_value=1, key="retrieval_n_chunks")
         if st.session_state.retrieval_mode == "Hybrid":
             st.slider(
                 "Dense weight", min_value=0.0, max_value=1.0, step=0.05, key="hybrid_dense_weight",
-                help="1.0 = only the embedding score counts, 0.0 = only BM25. Applies to the next question, no re-index needed.",
+                help="1.0 = only the embedding score counts, 0.0 = only BM25.",
             )
-
-        st.number_input("Chunks to retrieve", min_value=1, key="retrieval_n_chunks")
-
         st.toggle(
             "Rerank with cross-encoder", key="rerank",
             help="Retrieve more candidates, re-score each against the question with a cross-encoder "
-                 "(ms-marco-MiniLM, ~90 MB download on first use) and keep the best. No re-index needed.",
+                 "(ms-marco-MiniLM, ~90 MB download on first use) and keep the best.",
         )
         if st.session_state.rerank:
             st.number_input("Candidates to rerank", min_value=1, key="rerank_candidates")
 
-    st.caption("Query strategy")
     query_strategies_available = QUERY_STRATEGIES if llm_on else [NO_STRATEGY]
     if index and index["config"].get("question_index"):
         # the index holds questions, so turning the query into a fake answer would hurt
         query_strategies_available = [s for s in query_strategies_available if s != "HyDE"]
     if st.session_state.query_strategy not in query_strategies_available:
         st.session_state.query_strategy = NO_STRATEGY
-    with st.expander(st.session_state.query_strategy, expanded=True):
+    query_summary = "None" if st.session_state.query_strategy == NO_STRATEGY else st.session_state.query_strategy
+    with st.expander(f"Query strategy · {query_summary}", key="section_query", icon=":material/edit_note:"):
         st.selectbox(
-            "Query strategy", query_strategies_available, key="query_strategy",
-            help=None if llm_on else "Rewrite, HyDE and Decompose need the LLM enabled.",
+            "Query strategy", query_strategies_available, key="query_strategy", label_visibility="collapsed",
         )
+        if not llm_on:
+            st.caption("Rewrite, HyDE and Decompose need the LLM enabled.")
 
     fallback_models = model_catalog.FALLBACK_CHAT_MODELS[st.session_state.provider]
     chat_models, models_note = live_or_fallback(
         lambda key: _fetch_chat_models(st.session_state.provider, key), api_key, fallback_models,
     )
 
-    st.caption("Post retrieval")
     if st.session_state.post_retrieval_model not in chat_models:  # provider or list changed
         st.session_state.post_retrieval_model = SAME_MODEL
     if not llm_on:
@@ -367,7 +363,8 @@ with st.sidebar:
         name for name, key in (("Corrective RAG", "corrective_rag"), ("Compression", "contextual_compression"), ("Positioning", "chunk_positioning"))
         if st.session_state[key]
     ]
-    with st.expander(" + ".join(post_steps) or "None", expanded=False):
+    post_summary = " + ".join(post_steps) or "None"
+    with st.expander(f"Post retrieval · {post_summary}", key="section_post", icon=":material/filter_alt:"):
         st.checkbox(
             "Corrective RAG", key="corrective_rag", disabled=not llm_on,
             help="The LLM judges each retrieved chunk and drops the ones that do not help answer the question. One extra LLM call.",
@@ -386,25 +383,31 @@ with st.sidebar:
             help="These steps make many small judgement calls, so a cheaper model than the one writing the answer is often enough.",
         )
 
-    st.caption("LLM")
+    st.caption("Model")
+
     if st.session_state.model not in chat_models:  # provider or list changed
         st.session_state.model = model_catalog.default_model(chat_models, fallback_models)
-    with st.expander(f"{st.session_state.model} (max_tokens={st.session_state.max_tokens})", expanded=True):
+    llm_summary = st.session_state.model if llm_on else ("off" if has_api_key else "off, no API key")
+    with st.expander(f"LLM · {llm_summary}", key="section_llm", icon=":material/smart_toy:"):
+        st.toggle(
+            "Enable LLM", key="enable_generation", disabled=not has_api_key,
+            help="Off (or no API key): no LLM calls are made, you only see the retrieved chunks.",
+        )
         st.selectbox("Provider", PROVIDERS, key="provider")
         select_model("Model", "model", chat_models, fallback_models, models_note)
         st.caption(models_note)
         st.number_input("Max tokens", min_value=500, step=500, key="max_tokens")
 
     # Always rendered (never inside a condition) so Streamlit keeps the keys in session state
-    st.caption("API keys")
-    with st.expander("API keys", expanded=not has_api_key):
+    keys_set = [
+        name for name, key in (("Anthropic", "anthropic_api_key"), ("OpenAI", "openai_api_key"), ("Hugging Face", "hf_token"))
+        if st.session_state[key]
+    ]
+    keys_summary = ", ".join(keys_set) or "none set"
+    with st.expander(f"API keys · {keys_summary}", key="section_keys", icon=":material/key:"):
         st.text_input("Anthropic API key", type="password", key="anthropic_api_key")
         st.text_input("OpenAI API key", type="password", key="openai_api_key")
         st.text_input("Hugging Face token", type="password", key="hf_token", help="Only needed for gated or private embedding models.")
-
-    st.caption("Evaluation")
-    with st.expander("Evaluation", expanded=False):
-        st.checkbox("Run RAGAS", disabled=True)
 
 settings = {key: st.session_state[key] for key in DEFAULTS}
 
@@ -478,29 +481,31 @@ with col_chat:
 
 # DEBUG PANE ---------------------------------------------------------------
 with col_debug:
-    st.subheader("Debug panel")
+    # same kind of row as the chat header, so the two line up
+    number, total = (debug_positions.index(debug_position) + 1 if debug_position is not None else 0), len(debug_positions)
+    with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
+        st.subheader("Debug panel")
+        if total > 1:  # stepping between the questions asked so far
+            with st.container(horizontal=True, horizontal_alignment="right", vertical_alignment="center", gap="xsmall"):
+                st.button(
+                    ":material/chevron_left:", key="debug_previous", type="tertiary", help="Previous question",
+                    disabled=number == 1, on_click=show_debug, args=(debug_positions[number - 2],),
+                )
+                st.markdown(f"Question {number} of {total}", width="content")
+                st.button(
+                    ":material/chevron_right:", key="debug_next", type="tertiary", help="Next question",
+                    disabled=number == total, on_click=show_debug, args=(debug_positions[min(number, total - 1)],),
+                )
+                st.button(
+                    ":material/last_page:", key="debug_latest", type="tertiary", help="Back to the latest question",
+                    disabled=number == total, on_click=show_debug, args=(None,),
+                )
 
     if debug_position is None:
         st.info("Ask a question to see debug info here.")
     else:
         debug = st.session_state.messages[debug_position]["debug"]
         display = debug["query_display"]
-
-        # which question this is, and stepping between questions
-        number, total = debug_positions.index(debug_position) + 1, len(debug_positions)
-        if total > 1:
-            with st.container(horizontal=True, vertical_alignment="center"):
-                st.button(
-                    "Previous question", key="debug_previous", icon=":material/chevron_left:", type="tertiary",
-                    disabled=number == 1, on_click=show_debug, args=(debug_positions[number - 2],),
-                )
-                st.markdown(f"**Question {number} of {total}**", width="content")
-                st.button(
-                    "Next question", key="debug_next", icon=":material/chevron_right:", icon_position="right", type="tertiary",
-                    disabled=number == total, on_click=show_debug, args=(debug_positions[min(number, total - 1)],),
-                )
-                if number != total:
-                    st.button("Latest", key="debug_latest", icon=":material/last_page:", type="tertiary", on_click=show_debug, args=(None,))
         st.caption(f":material/chat_bubble: {debug['question']}")
 
         # costs

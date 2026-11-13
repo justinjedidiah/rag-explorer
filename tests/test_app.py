@@ -357,7 +357,7 @@ def debug_panel_question(at: AppTest) -> str:
 def test_debug_panel_can_go_back_to_an_earlier_question(indexed):
     at = indexed()
     ask(at, "event horizon?")
-    assert not [b for b in at.button if b.label == "Previous question"]  # nothing to switch between yet
+    assert not [b for b in at.button if b.key == "debug_previous"]  # nothing to switch between yet
     ask(at, "sourdough starter?")
     assert "sourdough starter?" in debug_panel_question(at)
 
