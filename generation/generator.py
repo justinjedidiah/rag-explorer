@@ -1,5 +1,6 @@
 import json
 import re
+from ingestion.chunker import page_label
 
 
 def parse_json_list(raw: str) -> list:
@@ -65,7 +66,7 @@ def chunk_text_for_llm(chunk: dict) -> str:
 def build_prompt(question: str, chunks: list[dict]) -> str:
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
-        context_parts.append(f"[Source {i} | Page {chunk['page']}]\n{chunk_text_for_llm(chunk)}")
+        context_parts.append(f"[Source {i} | {page_label(chunk).capitalize()}]\n{chunk_text_for_llm(chunk)}")
     context = "\n\n---\n\n".join(context_parts)
 
     return f"""Answer the question using only the sources below.

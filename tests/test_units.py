@@ -3,12 +3,14 @@ import pytest
 
 from generation.generator import parse_json_list, build_prompt, chunk_text_for_llm
 from generation.models import is_openai_chat_model, default_model
+from indexing import vectorstore
 from indexing.nonvectors import BM25Indexer
 from indexing.vectors import _batches
-from ingestion.chunker import chunk_documents
+from ingestion.chunker import chunk_documents, page_label
 from retrieval.postprocess import corrective_filter, reposition
 from retrieval.retriever import merge_results, search_sparse
 
+NEWLINE = chr(10)
 PAGES = [{"text": "First sentence here. " * 30, "page": 1}, {"text": "Another page of text. " * 30, "page": 2}]
 
 
@@ -20,6 +22,24 @@ def test_chunks_respect_size_and_have_unique_ids(strategy):
     assert all(len(c["text"]) <= 100 for c in chunks)
     assert len({c["chunk_id"] for c in chunks}) == len(chunks)
     assert {c["page"] for c in chunks} == {1, 2}
+
+
+@pytest.mark.parametrize("strategy", ["Fixed size", "Semantic", "Hierarchical"])
+def test_chunks_can_run_over_a_page_break(strategy):
+    pages = [{"text": "The treaty was signed in", "page": 4}, {"text": "Vienna after long talks.", "page": 6}]
+    chunks = chunk_documents(pages, strategy, size=100, overlap=10, parent_size=300)
+    assert [(c["text"], c["page"], c["page_end"]) for c in chunks] == [
+        ("The treaty was signed in" + NEWLINE + "Vienna after long talks.", 4, 6),
+    ]
+    assert page_label(chunks[0]) == "pages 4-6" and page_label({"page": 2, "page_end": 2}) == "page 2"
+
+
+@pytest.mark.parametrize("strategy", ["Fixed size", "Semantic", "Hierarchical"])
+def test_chunk_pages_follow_the_text(strategy):
+    chunks = chunk_documents(PAGES, strategy, size=100, overlap=10, parent_size=300)
+    for c in chunks:
+        assert c["page"] <= c["page_end"]
+        assert ("First" in c["text"]) == (c["page"] == 1) and ("Another" in c["text"]) == (c["page_end"] == 2)
 
 
 def test_hierarchical_children_point_to_their_parent():
@@ -179,3 +199,13 @@ def test_openai_non_chat_models_are_filtered_out(model_id):
 def test_default_model_prefers_the_fallback_choice():
     assert default_model(["new-1", "cheap", "new-2"], fallback=["cheap", "big"]) == "cheap"
     assert default_model(["new-1", "new-2"], fallback=["cheap", "big"]) == "new-1"
+
+
+# vector store ---------------------------------------------------------------
+def test_vector_search_is_exact_cosine_best_first():
+    chunks = [{"chunk_id": f"c{i}", "text": f"t{i}", "page": 1} for i in range(4)]
+    store = vectorstore.build_index(chunks, [[1, 0], [0, 5], [3, 3], [0, 0]])  # lengths differ, one is all zeros
+    found = vectorstore.search(store, [2, 0], k=10)                            # k larger than the store
+    assert [i for i, _ in found] == [0, 2, 1, 3]
+    assert [round(score, 3) for _, score in found] == [1.0, 0.707, 0.0, 0.0]
+    assert vectorstore.search(store, [0, 1], k=1) == [(1, 1.0)]

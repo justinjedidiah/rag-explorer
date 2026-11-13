@@ -136,7 +136,7 @@ Score colors apply to cosine and reranker scores, which are on a 0 to 1 scale: ð
 app.py                  Streamlit UI only
 pipeline.py             build_index() and answer_question(), usable without the UI
 ingestion/              PDF loading and chunking
-indexing/               embedding models, BM25, Chroma store, hypothetical questions
+indexing/               embedding models, BM25, NumPy vector store, hypothetical questions
 query/                  query strategies
 retrieval/              search, hybrid fusion, reranker, post-retrieval steps
 generation/             LLM wrapper (Claude and OpenAI) with token tracking

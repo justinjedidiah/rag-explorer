@@ -106,7 +106,7 @@ def build(pages):
         key = json.dumps(config, sort_keys=True)
         if key not in cache:
             cache[key] = pipeline.build_index(
-                pages, config, session_id=f"test-{len(cache)}",
+                pages, config,
                 llm=FakeLLM() if settings["question_index"] else None,
                 log=lambda message: None,
             )

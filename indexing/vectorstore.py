@@ -1,19 +1,21 @@
-import re
-import time
-import chromadb
+"""The dense index: every chunk's embedding in one NumPy matrix, searched exactly.
 
-# In memory on purpose. An index only lives as long as its browser session, so
-# nothing needs to survive a restart, and PersistentClient loses small
-# collections: below its sync threshold their HNSW index exists only in a cache,
-# and once about nine collections exist the oldest are evicted and every query
-# on them fails with "Error creating hnsw segment reader: Nothing found on disk".
-client = chromadb.EphemeralClient()
+An index holds one document for one browser session, so it is small enough to
+compare a question against every chunk (one matrix product) instead of using an
+approximate index. The store is a plain dict that lives in the session's state
+and is freed with it; nothing is shared between sessions.
+
+This replaced Chroma, whose in-memory collections could silently return no
+results once other collections had been created in the same process.
+"""
+import numpy as np
 
 
 def chunk_metadata(chunk: dict) -> dict:
-    """What is stored next to a chunk's text in every index (Chroma has no None values)."""
+    """What is stored next to a chunk's text in every index."""
     return {
         "page": chunk["page"],
+        "page_end": chunk.get("page_end") or chunk["page"],
         "parent_text": chunk.get("parent_text") or "",
         "parent_id": chunk.get("parent_id") or "",
         # set when the indexed text is a generated question that stands in for the chunk
@@ -22,49 +24,24 @@ def chunk_metadata(chunk: dict) -> dict:
     }
 
 
-def get_session_collection_name(session_id: str) -> str:
-    """Make Chroma collection name based on streamlit session id"""
-    # Chroma only allows [a-zA-Z0-9._-] in collection names
-    return "docs_" + re.sub(r"[^a-zA-Z0-9._-]", "-", session_id)
+def _unit(vectors) -> np.ndarray:
+    """Rows scaled to length 1, so a dot product between two of them is their cosine similarity."""
+    matrix = np.asarray(vectors, dtype=np.float32)
+    norms = np.linalg.norm(matrix, axis=-1, keepdims=True)
+    return matrix / np.where(norms == 0, 1, norms)
 
 
-def build_index(chunks: list[dict], vectors: list[list[float]], session_id: str):
-    """Make Chroma collection, delete old collection if already exist"""
-    cleanup_old_collections()
-    name = get_session_collection_name(session_id)
-    existing = [c.name for c in client.list_collections()]
-    if name in existing:
-        client.delete_collection(name)
-
-    collection = client.create_collection(
-        name,
-        metadata={
-            "hnsw:space": "cosine",
-            "created_at": time.time(),
-        }
-    )
-    # Chroma rejects a single add() above its max batch size
-    batch_size = client.get_max_batch_size()
-    for start in range(0, len(chunks), batch_size):
-        batch = chunks[start:start + batch_size]
-        collection.add(
-            ids=[c["chunk_id"] for c in batch],
-            documents=[c["text"] for c in batch],
-            embeddings=vectors[start:start + batch_size],
-            metadatas=[chunk_metadata(c) for c in batch],
-        )
-    return collection
+def build_index(chunks: list[dict], vectors: list[list[float]]) -> dict:
+    return {
+        "vectors": _unit(vectors),
+        "ids": [c["chunk_id"] for c in chunks],
+        "texts": [c["text"] for c in chunks],
+        "metadatas": [chunk_metadata(c) for c in chunks],
+    }
 
 
-def cleanup_old_collections(max_age_hours: int = 24):
-    """Free the collections of sessions that are long gone. A session's
-    collection cannot be reached once the session ends, so without this a
-    long-running server would keep every document ever indexed in memory."""
-    now = time.time()
-    for col in client.list_collections():
-        created_at = (col.metadata or {}).get("created_at", 0)
-        if (now - created_at) / 3600 > max_age_hours:
-            try:
-                client.delete_collection(col.name)
-            except Exception:
-                pass
+def search(store: dict, query_vector: list[float], k: int) -> list[tuple[int, float]]:
+    """(position in the store, cosine similarity) of the k entries closest to the query, best first."""
+    scores = store["vectors"] @ _unit(query_vector)
+    best = np.argsort(-scores)[:k]
+    return [(int(i), float(scores[i])) for i in best]

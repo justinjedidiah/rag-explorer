@@ -20,8 +20,8 @@ class SentenceTransformerIndexer:
         texts = [c["text"] for c in chunks]
         return self.encoder.encode(texts, show_progress_bar=False).tolist()
 
-    def build_index(self, chunks: list[dict], vectors: list[list[float]], session_id: str):
-        return build_index(chunks, vectors, session_id)
+    def build_index(self, chunks: list[dict], vectors: list[list[float]]) -> dict:
+        return build_index(chunks, vectors)
 
     def process_query(self, query: str) -> list[float]:
         return self.encoder.encode([query], show_progress_bar=False)[0].tolist()
@@ -59,8 +59,8 @@ class OpenAIIndexer:
         self.usage.append({"label": f"Indexing {len(texts)} chunks", "tokens": total_tokens})
         return vectors
 
-    def build_index(self, chunks: list[dict], vectors: list[list[float]], session_id: str):
-        return build_index(chunks, vectors, session_id)
+    def build_index(self, chunks: list[dict], vectors: list[list[float]]) -> dict:
+        return build_index(chunks, vectors)
 
     def process_query(self, query: str) -> list[float]:
         response = self.client.embeddings.create(input=[query], model=self.model_name)

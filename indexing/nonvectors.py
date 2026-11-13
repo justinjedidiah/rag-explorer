@@ -23,7 +23,7 @@ class BM25Indexer:
     def process_chunks(self, chunks: list[dict]):
         return self._tokenize([c["text"] for c in chunks])
 
-    def build_index(self, chunks: list[dict], corpus_tokens, session_id: str | None = None) -> dict:
+    def build_index(self, chunks: list[dict], corpus_tokens) -> dict:
         """bm25s.BM25 only stores token indices, so keep ids, texts and metadata next to it."""
         bm25 = bm25s.BM25()
         bm25.index(corpus_tokens, show_progress=False)

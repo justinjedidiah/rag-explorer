@@ -123,7 +123,7 @@ def test_hyde_is_skipped_on_a_question_index(ask):
 def test_question_index_needs_an_llm(pages):
     config = pipeline.index_config({**DEFAULT_SETTINGS, "question_index": True})
     with pytest.raises(ValueError, match="LLM"):
-        pipeline.build_index(pages, config, "test-no-llm", llm=None, log=lambda m: None)
+        pipeline.build_index(pages, config, llm=None, log=lambda m: None)
 
 
 # post retrieval -----------------------------------------------------------
@@ -182,15 +182,16 @@ def test_everything_switched_on_together(ask):
 
 
 def test_an_index_survives_many_newer_ones(pages):
-    # Chroma's PersistentClient lost small collections once about nine existed
-    def build_for(session):
-        return pipeline.build_index(pages, pipeline.index_config(DEFAULT_SETTINGS), f"test-many-{session}", log=lambda m: None)
+    # Chroma collections went silent once enough newer ones existed, and only when read in between
+    def build_and_ask():
+        index = pipeline.build_index(pages, pipeline.index_config(DEFAULT_SETTINGS), log=lambda m: None)
+        assert pipeline.answer_question("event horizon", index, DEFAULT_SETTINGS, None)["chunks"]
+        return index
 
-    first = build_for(0)
-    for session in range(1, 15):
-        build_for(session)
-    result = pipeline.answer_question("event horizon", first, DEFAULT_SETTINGS, None)
-    assert result["chunks"][0]["page"] == 3
+    indexes = [build_and_ask() for _ in range(40)]
+    for index in indexes:
+        result = pipeline.answer_question("event horizon", index, DEFAULT_SETTINGS, None)
+        assert result["chunks"][0]["page"] == 3
 
 
 # index config -------------------------------------------------------------
@@ -223,10 +224,10 @@ def test_custom_stopwords_are_split_and_cleaned():
 # indexing errors ----------------------------------------------------------
 def test_pdf_without_text_is_rejected():
     with pytest.raises(ValueError, match="No text"):
-        pipeline.build_index([], pipeline.index_config(DEFAULT_SETTINGS), "test-empty", log=lambda m: None)
+        pipeline.build_index([], pipeline.index_config(DEFAULT_SETTINGS), log=lambda m: None)
 
 
 def test_openai_embeddings_need_a_key(pages):
     config = pipeline.index_config({**DEFAULT_SETTINGS, "dense_model": "OpenAI Embedding"})
     with pytest.raises(ValueError, match="OpenAI API key"):
-        pipeline.build_index(pages, config, "test-no-key", openai_api_key="", log=lambda m: None)
+        pipeline.build_index(pages, config, openai_api_key="", log=lambda m: None)

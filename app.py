@@ -1,7 +1,7 @@
 import streamlit as st
-from streamlit.runtime.scriptrunner import get_script_run_ctx
 from config import ANTHROPIC_API_KEY, OPENAI_API_KEY, HF_TOKEN
 from ingestion.loader import load_pdf
+from ingestion.chunker import page_label
 from indexing.indexers import OPENAI_EMBEDDING
 from indexing.nonvectors import BM25_LANGUAGES
 from query.handler import NO_STRATEGY
@@ -62,8 +62,6 @@ DEFAULTS = {
 }
 
 # SESSION STATE -------------------------------------------------------------
-session_id = get_script_run_ctx().session_id
-
 # Streamlit drops the state of widgets that were not rendered in a run (e.g. the
 # BM25 options while in Dense mode), so this also restores those to their default.
 for key, val in DEFAULTS.items():
@@ -170,14 +168,14 @@ def pick_suggestion():
 
 def render_sources(chunks: list[dict], expanded: bool):
     """The retrieved chunks behind an answer, folded into one line."""
-    pages = sorted({chunk["page"] for chunk in chunks})
+    pages = sorted({page for chunk in chunks for page in range(chunk["page"], chunk.get("page_end", chunk["page"]) + 1)})
     label = (
         f"{len(chunks)} source{'s' if len(chunks) != 1 else ''} · "
         f"page{'s' if len(pages) != 1 else ''} {', '.join(str(page) for page in pages)}"
     )
     with st.expander(label, expanded=expanded, icon=":material/format_quote:"):
         for i, chunk in enumerate(chunks, 1):
-            st.markdown(f"**Source {i}** · page {chunk['page']} · {score_badge(chunk)}")
+            st.markdown(f"**Source {i}** · {page_label(chunk)} · {score_badge(chunk)}")
             st.caption(chunk["text"])
 
 
@@ -215,7 +213,6 @@ def index_document(name: str, data: bytes, settings: dict, llm):
             index = pipeline.build_index(
                 pages,
                 config,
-                session_id,
                 openai_api_key=settings["openai_api_key"],
                 hf_token=settings["hf_token"],
                 llm=llm,
@@ -544,7 +541,7 @@ with col_debug:
 
         with st.expander(f"🔎 Retrieved chunks ({len(debug['chunks'])})", expanded=False):
             for i, chunk in enumerate(debug["chunks"], 1):
-                st.markdown(f"**Chunk {i}** — Page {chunk['page']} — {score_badge(chunk)}")
+                st.markdown(f"**Chunk {i}** — {page_label(chunk).capitalize()} — {score_badge(chunk)}")
                 if chunk.get("matched_question"):
                     st.caption(f"↳ matched question: {chunk['matched_question']}")
                 if chunk.get("score_type") == "rerank":
@@ -578,7 +575,7 @@ with col_debug:
         if debug["dropped_chunks"]:
             with st.expander(f"🗑️ Dropped by Corrective RAG ({len(debug['dropped_chunks'])})", expanded=False):
                 for chunk in debug["dropped_chunks"]:
-                    st.markdown(f"Page {chunk['page']} — {score_badge(chunk)}")
+                    st.markdown(f"{page_label(chunk).capitalize()} — {score_badge(chunk)}")
                     with st.container(height=120):
                         st.text(chunk["text"])
 

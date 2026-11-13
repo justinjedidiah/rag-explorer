@@ -58,7 +58,6 @@ def index_config(settings: dict) -> dict:
 def build_index(
     pages: list[dict],
     config: dict,
-    session_id: str,
     openai_api_key: str | None = None,
     hf_token: str | None = None,
     llm: LLM | None = None,
@@ -97,14 +96,14 @@ def build_index(
         log(f"Embedding {len(entries)} texts with {model}...")
         indexer = get_dense_indexer(config, openai_api_key, hf_token)
         vectors = indexer.process_chunks(entries)
-        store = indexer.build_index(entries, vectors, session_id)
+        store = indexer.build_index(entries, vectors)
         index["dense"] = {"indexer": indexer, "store": store, "entries_per_chunk": entries_per_chunk}
 
     if "bm25_language" in config:
         log(f"Building BM25 index over {len(entries)} texts...")
         indexer = get_sparse_indexer(config)
         tokens = indexer.process_chunks(entries)
-        store = indexer.build_index(entries, tokens, session_id)
+        store = indexer.build_index(entries, tokens)
         index["sparse"] = {"indexer": indexer, "store": store, "entries_per_chunk": entries_per_chunk}
 
     return index

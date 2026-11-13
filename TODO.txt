@@ -11,7 +11,6 @@ Embeddings / retrieval
 - late interaction: ColBERT
 - multilingual -> multilingual-e5-large
 - code -> code-search-net or voyage-code-2
-- chunks tidak pernah nyebrang halaman (chunking per page), mungkin perlu digabung dulu
 
 Lainnya
 - add caching? (embeddings + LLM calls; sekarang cuma model list yg di-cache 1 jam)
@@ -48,6 +47,7 @@ Tambahan
 - sidebar kasih warning kalau settings berubah dan perlu re-index
 - tests (pytest, tanpa API call)
 - model terpisah (lebih murah) untuk corrective RAG + compression
+- chunks bisa nyebrang halaman (halaman digabung dulu sebelum chunking, chunk simpan page + page_end)
 
 Bug yang dibetulkan
 - decompose cuma pakai sub-question pertama

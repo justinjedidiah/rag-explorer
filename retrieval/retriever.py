@@ -1,10 +1,11 @@
 """Search an index built by pipeline.build_index.
 
 Every function returns chunks as dicts:
-  {"chunk_id", "text", "page", "score", "score_type", "parent_text", "parent_id", "matched_question"}
+  {"chunk_id", "text", "page", "page_end", "score", "score_type", "parent_text", "parent_id", "matched_question"}
 score_type says what the number means: "cosine" (0-1 similarity), "bm25" (unbounded)
 or "hybrid" (weighted mix of both, 0-1 but relative to the other candidates).
 """
+from indexing import vectorstore
 
 
 def _to_chunk(chunk_id: str, text: str, metadata: dict, score: float, score_type: str) -> dict:
@@ -15,6 +16,7 @@ def _to_chunk(chunk_id: str, text: str, metadata: dict, score: float, score_type
         "chunk_id": metadata["source_chunk_id"] if is_question else chunk_id,
         "text": metadata["source_text"] if is_question else text,
         "page": metadata["page"],
+        "page_end": metadata.get("page_end") or metadata["page"],
         "score": round(float(score), 4),
         "score_type": score_type,
         "parent_text": metadata["parent_text"] or None,
@@ -34,16 +36,11 @@ def _best_per_chunk(chunks: list[dict], k: int) -> list[dict]:
 
 
 def search_dense(dense: dict, query: str, k: int) -> list[dict]:
-    collection = dense["store"]
-    results = collection.query(
-        query_embeddings=[dense["indexer"].process_query(query)],
-        n_results=min(k * dense["entries_per_chunk"], collection.count()),
-    )
+    store = dense["store"]
+    found = vectorstore.search(store, dense["indexer"].process_query(query), k * dense["entries_per_chunk"])
     return _best_per_chunk([
-        _to_chunk(chunk_id, text, metadata, 1 - distance, "cosine")
-        for chunk_id, text, metadata, distance in zip(
-            results["ids"][0], results["documents"][0], results["metadatas"][0], results["distances"][0]
-        )
+        _to_chunk(store["ids"][idx], store["texts"][idx], store["metadatas"][idx], score, "cosine")
+        for idx, score in found
     ], k)
 
 
