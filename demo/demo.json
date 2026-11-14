@@ -1,0 +1,30 @@
+{
+  "url": "http://localhost:8765",
+  "waitFor": "text=No document yet",
+  "title": "RAG Explorer",
+  "subtitle": "Try every RAG configuration on your own PDF",
+  "accent": "#ff4b4b",
+  "viewport": [1440, 810],
+  "music": "tech",
+  "captions": { "position": "top", "size": 19, "offset": 26 },
+  "mask": [".st-key-section_keys input"],
+  "hide": ["[data-testid=stToolbar]", "[data-testid=stDecoration]"],
+  "startHold": 1500,
+  "endHold": 2500,
+  "steps": [
+    { "section": "upload-and-index", "caption": "Upload any PDF", "action": "setInputFiles", "selector": "input[type=file]", "value": "annual-report-2025.pdf", "waitFor": "button:has-text(\"Index document\"):not([disabled])", "timeout": 60000, "hold": 1500 },
+    { "caption": "Index it with the settings you chose", "action": "click", "selector": "button:has-text(\"Index document\")", "waitFor": "text=Ask about your document", "timeout": 300000, "hold": 1800, "speed": 8 },
+    { "section": "ask-with-sources", "caption": "Ask a question about the document", "action": "type", "selector": "[data-testid=stChatInputTextArea]", "value": "How many customers does BCA serve?", "delay": 45, "hold": 500 },
+    { "action": "press", "key": "Enter", "waitFor": "summary:has-text(\"sources ·\")", "timeout": 120000, "hold": 2500, "speed": 3 },
+    { "caption": "Every answer cites its source pages", "action": "hover", "selector": "summary:has-text(\"sources ·\")", "hold": 2500 },
+    { "section": "debug-panel", "caption": "The debug panel shows chunks and scores", "action": "click", "selector": "summary:has-text(\"Retrieved chunks\")", "hold": 3500, "highlight": true },
+    { "section": "reranking", "caption": "Change a setting, like reranking", "action": "click", "selector": "summary:has-text(\"Results ·\")", "hold": 1200 },
+    { "action": "click", "selector": "label:has-text(\"Rerank with cross-encoder\")", "waitFor": "summary:has-text(\"reranked\")", "hold": 1500 },
+    { "caption": "Ask again, no re-index needed", "action": "type", "selector": "[data-testid=stChatInputTextArea]", "value": "What do the cloves on the cover symbolize?", "delay": 45, "hold": 500 },
+    { "action": "press", "key": "Enter", "waitFor": "text=Question 2 of 2", "timeout": 180000, "hold": 1500, "speed": 3 },
+    { "caption": "Rerank scores sit next to the originals", "hold": 3500 },
+    { "section": "process-log", "caption": "", "action": "click", "selector": "summary:has-text(\"Retrieved chunks\")", "hold": 600 },
+    { "caption": "The process log lists every step that ran", "action": "click", "selector": "summary:has-text(\"Process log\")", "hold": 3000 },
+    { "section": "", "caption": "RAG Explorer: see what your RAG really does", "hold": 2500 }
+  ]
+}

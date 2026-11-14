@@ -4,7 +4,29 @@ Try every RAG configuration and find the best for your needs. Upload a document 
 
 The debug panel shows exactly what happened like which chunks were retrieved, what scores they got, how the query was transformed, which steps ran, and what each step cost in tokens.
 
-![app screenshot](./screenshots/app_screenshot.png)
+## Demo
+
+A one-minute walkthrough. The waits (indexing, LLM calls) are sped up. [Watch the full video with music](./screenshots/demo/demo.mp4).
+
+**1. Upload a PDF and index it** with the chunking and search settings you chose.
+
+![Upload a PDF and index it](./screenshots/demo/01-upload-and-index.gif)
+
+**2. Ask a question** and get an answer that cites the pages it came from.
+
+![Ask a question and get an answer with sources](./screenshots/demo/02-ask-with-sources.gif)
+
+**3. Open the debug panel** to see which chunks were retrieved and how they scored.
+
+![Retrieved chunks and scores in the debug panel](./screenshots/demo/03-debug-panel.gif)
+
+**4. Change a setting and ask again.** Here reranking is switched on, with no re-index needed, and the rerank scores show next to the original ones.
+
+![Turn on reranking and compare the scores](./screenshots/demo/04-reranking.gif)
+
+**5. Read the process log** to see which steps ran and which were skipped.
+
+![The process log](./screenshots/demo/05-process-log.gif)
 
 ---
 

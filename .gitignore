@@ -3,3 +3,6 @@
 .chroma_db
 __pycache__
 *.pdf
+
+demo/out/
+demo/.auth/
